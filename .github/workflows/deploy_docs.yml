@@ -1,0 +1,77 @@
+name: Build and Deploy Documentation to Website
+
+on:
+  push:
+    branches:
+      - main
+    # Run any time source code is updated, or the a manual documentation page is added
+    paths:
+      - 'src/**'
+      - 'docs/**'
+
+  # Allow manual builds.
+  workflow_dispatch:
+jobs:
+  build-docs:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0   # v7
+
+      - name: Install System Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y doxygen
+
+      - name: Setup Node.js
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
+        with:
+          node-node: '20'
+
+      # Generation process is:
+      # 1. Run doxygen outputing to XML
+      # 2. First pass conversion to markdown using `moxygen`
+      # 3. Custom script to pick-up some stragglers and reorganize
+      - name: Generate Markdown
+        run: |
+          npm install -g moxygen
+          npm install fast-xml-parser
+          doxygen Doxyfile
+          moxygen --frontmatter --pages --classes --html-anchors --output docs/api/md/api-%s.md docs/api/xml
+          # Script runs inplace in the docs/md folder
+          node utilities/organize-api-docs.mjs
+
+      - name: Checkout Website Repo
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0   # v7
+        with:
+          repository: XFELPP/xfelpp-home
+          token: ${{ secrets.DOCS_WEBSITE_DEPLOY_TOKEN }}
+          # Leave it in a sub-directory
+          path: xfelpp-home # Checks out website into a subfolder
+
+      - name: Copy Docs to Website Content
+        run: |
+          # Clear the existing target folder to remove deleted pages
+          rm -rf xfelpp-home/src/content/docs/xalgospp/*
+          mkdir -p xfelpp-home/src/content/docs/xalgospp/api
+
+          # Copy source markdown into the xalgospp API sub-directory
+          cp -r docs/api/md/* xfelpp-home/src/content/docs/xalgospp/api
+          cp -r docs/index.mdx xfelpp-home/src/content/docs/xalgospp/index.mdx
+          # TODO: Setup copies for any manual pages once those are being written
+
+      - name: Commit and Push Changes
+        working-directory: ./xfelpp-home
+        run: |
+          git config --global user.name "GitHub Documentation Action Bot"
+          git config --global user.email "actions@github.com"
+          git add src/content/docs/xalgospp/
+
+          # Check if there are actual changes before committing to avoid empty commits
+          if git diff-index --quiet HEAD; then
+            echo "No changes in documentation. Skipping commit."
+          else
+            git commit -m "DOC [XAlgosPP] Auto generate source code API documentation"
+            git push origin main
+          fi

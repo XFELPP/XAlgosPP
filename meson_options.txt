@@ -1,0 +1,30 @@
+option(
+    'build_core',
+    type: 'boolean',
+    value: true,
+    description: 'Build the C++ shared libraries.'
+)
+option(
+    'build_python',
+    type: 'boolean',
+    value: true,
+    description: 'Build the Python extension modules.'
+)
+option(
+    'xalg_cuda_archs',
+    type: 'string',
+    value: 'all',
+    description: 'Target CUDA architectures as comma-separated string (e..g 75,80,90), or "all".',
+)
+option(
+    'xalg_as_wheel',
+    type: 'boolean',
+    value: true,
+    description: 'Install C++ libraries inside wheel structure modifying RPATH appropriately.'
+)
+option(
+    'build_examples',
+    type: 'boolean',
+    value: false,
+    description: 'Build the small example programs.',
+)

@@ -1,0 +1,31 @@
+---
+title: XAlgosPP
+description: Algorithms and Utilities for Processing Array Data from XFELs.
+hero:
+  tagline: Algorithms and Utilities for Processing Array Data from XFELs.
+  actions:
+    - text: XFELPP
+      link: https://www.xfelpp.org
+      icon: external
+      #icon: right-arrow
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+<Aside type="note">
+  This website and associated infrastructure is still under construction. Please bear with us as we bring everything online.
+</Aside>
+
+`XAlgosPP` is a small library intended to aid with first-pass processing of array data produced by XFEL light sources. It contains a number of utilities for interfacing with external sources to fetch necessary auxiliary data (like calibration constants), in addition to providing robust algorithm implementations for CPU and GPU workloads.
+
+`XAlgosPP` is a cross-platform library with minimal build dependencies. It is written in C++, and provides Python bindings through `pybind11`. It is an [XFELPP](https://www.xfelpp.org) project - when using this library from Python, the only runtime dependencies are the other projects of the `XFELPP` framework.
+
+## Organization and Features
+
+`XAlgosPP` is organized around a single `AlgorithmBase` struct. All algorithms derive from this single, simple, class, and thus share its interface. This means that whether you are calibrating data, searching for peaks, or performing reductions (like azimuthal integration), the steps are identical: create the algorithm, and pass the data in.
+
+There are a number of categories of algorithms which are currently, or will shortly be, provided:
+
+- Calibration utilities - Fetch constants and calibrate your data on CPU or GPU.
+- Peakfinding and "droplet" algorithms - Search for the photons in your images.
+- Reduction algorithms - integrate your data in time, bin it in various dimensions, or perform azimuthal integration.

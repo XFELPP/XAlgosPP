@@ -1,0 +1,155 @@
+[build-system]
+requires = ["setuptools", "meson-python", "pybind11[global]"]
+build-backend = "mesonpy"
+
+[project]
+name = "xalgospp"
+description="Algorithms and Utilities for X-Ray Free Electron Laser (XFEL) Area Detector Analysis."
+requires-python = ">=3.8"
+dynamic = ["version"]
+# Need to set the index for each version: host, cuda128, cuda132
+# dependencies = [
+#     "ncarray",
+# ]
+authors = [
+    { name = "Gabriel Dorlhiac", email = "gabriel@dorlhiac.com" },
+]
+readme = "README.md"
+urls = { Changelog = "https://github.com/XFELPP/XAlgosPP/blob/main/CHANGELOG.md" }
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: GPU",
+    "Environment :: GPU :: NVIDIA CUDA",
+    "Environment :: GPU :: NVIDIA CUDA :: 12",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: GNU Affero General Public License v3",
+    "Operating System :: POSIX :: Linux",
+    "Operating System :: Microsoft :: Windows",
+    "Operating System :: MacOS",
+    "Natural Language :: English",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Programming Language :: C++",
+    "Topic :: Scientific/Engineering",
+    "Topic :: Software Development :: Libraries",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+]
+
+[tool.meson-python.args]
+install = ['--skip-subprojects']
+
+[tool.cibuildwheel]
+# pp* (PyPy for now)
+# cp36-* (Python 3.6)
+# cp37-* (Python 3.7)
+# *i686 (32-bit builds)
+skip = ["pp*", "cp36-*", "cp37-*", "*i686", "*-win32"]
+
+# Maybe redundant, but specify what we do build
+build = ["cp38-*", "cp39-*", "cp310-*", "cp311-*", "cp312-*", "cp313-*"]
+
+# Try to set things up to cache what's possible to make things faster
+build-frontend = { name = "pip", args = ["--no-build-isolation"] }
+
+before-build = [
+    "python -m pip install -U pip",
+    "python -m pip install \"meson>=1.10.1\" meson-python ninja \"pybind11[global]\" setuptools cmake delvewheel",
+]
+
+# For C++23 need a newer GCC coming from manylinux_2_28 (GCC 13) and later
+# manylinux_2_34 will give GCC 14
+manylinux-x86_64-image = "manylinux_2_28"
+manylinux-aarch64-image = "manylinux_2_28"
+
+config-settings = { "setup-args" = ["-Dbuild_core=false"] }
+
+[tool.cibuildwheel.linux]
+# The CI YAML pulls cuda-toolkit and determines version.
+# Just setup links here.
+before-all = [
+    """
+    if command -v apt-get >/dev/null; then
+        apt-get update && apt-get install -y ccache
+    elif command -v dnf >/dev/null; then
+        if [ "$(uname -m)" = "aarch64" ]; then
+            NVIDIA_URL="https://developer.download.nvidia.com/compute/cuda/repos/rhel8/sbsa/cuda-rhel8.repo"
+        else
+            NVIDIA_URL="https://developer.download.nvidia.com/compute/cuda/repos/rhel8/x86_64/cuda-rhel8.repo"
+        fi
+        dnf config-manager --add-repo $NVIDIA_URL && dnf clean all && dnf -y install cuda-nvcc-12-8 cuda-cudart-devel-12-8 cuda-nvrtc-devel-12-8 cuda-cccl-12-8 cuda-driver-devel-12-8 --exclude="cccl-13-*"
+        ln -sf /usr/local/cuda-12.8 /usr/local/cuda
+        dnf install -y epel-release && dnf install -y ccache
+    elif command -v yum >/dev/null; then
+        yum install -y epel-release && yum install -y ccache
+    elif command -v apk >/dev/null; then
+        apk add ccache
+    fi
+    ccache -z
+
+    mkdir install
+    /opt/python/cp310-cp310/bin/pip install meson ninja
+    export PATH="/opt/python/cp310-cp310/bin:$PATH"
+    meson setup builddir -Dbuild_core=true -Dbuild_python=false -Dnca_as_wheel=false --prefix={project}/install
+    meson compile -j 2 -C builddir
+    meson install -C builddir
+    """,
+]
+repair-wheel-command = "python utilities/repair_wheel.py {wheel} {dest_dir} --no-exclude-core"
+
+[tool.cibuildwheel.macos]
+before-all = """
+brew install ccache ninja meson cmake || true
+ccache -z
+meson setup builddir -Dbuild_core=true -Dbuild_python=false -Dnca_as_wheel=false --prefix=$(pwd)/install
+meson compile -j 2 -C builddir
+meson install -C builddir
+"""
+
+[tool.cibuildwheel.windows]
+config-settings = { "setup-args" = ["-Dcpp_compiler_launcher=", "-Dcuda_compiler_launcher=", "-Dbuild_core=false"] }
+before-all = [
+    "python -m pip install meson ninja",
+    "meson setup builddir -Dbuild_core=true -Dbuild_python=false -Dnca_as_wheel=false --prefix=%CD%/install",
+    "meson compile -j 2 -C builddir",
+    "meson install -C builddir"
+]
+repair-wheel-command = "python utilities/repair_wheel_win.py {dest_dir} {wheel} --no-exclude-core"
+
+[tool.cibuildwheel.linux.environment]
+CC = "ccache gcc"
+CXX = "ccache g++"
+CCACHE_DIR = "/project/.ccache"
+PIP_RETRIES = "20"
+CUDA_PATH = "/usr/local/cuda-12.8"
+CUDA_HOME = "/usr/local/cuda-12.8"
+PATH = "/usr/local/cuda-12.8/bin:/usr/local/cuda/bin:$PATH"
+LIBRARY_PATH = "/project/install/lib:/project/install/lib64:$LIBRARY_PATH"
+LD_LIBRARY_PATH = "/project/install/lib:/project/install/lib64:/usr/local/cuda-12.8/lib64:/usr/local/cuda/lib64:$LD_LIBRARY_PATH"
+LDFLAGS = "-L/project/install/lib -L/project/install/lib64"
+
+[tool.cibuildwheel.macos.environment]
+CC = "ccache clang"
+CXX = "ccache clang++"
+CCACHE_DIR = ".ccache"
+PIP_RETRIES = "20"
+MACOSX_DEPLOYMENT_TARGET = "11.0"
+# Not able to find cmake in wheel step otherwise?
+PATH = "/opt/homebrew/bin:/usr/local/bin:/Applications/CMake.app/Contents/bin:$PATH"
+LIBRARY_PATH = "$GITHUB_WORKSPACE/install/lib:$LIBRARY_PATH"
+DYLD_LIBRARY_PATH = "$GITHUB_WORKSPACE/install/lib:$DYLD_LIBRARY_PATH"
+LDFLAGS = "-L$GITHUB_WORKSPACE/install/lib"
+
+[tool.cibuildwheel.windows.environment]
+PIP_RETRIES = "20"
+CUDA_PATH = "C:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.8"
+CUDA_HOME = "C:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.8"
+LIB = "$GITHUB_WORKSPACE/install/lib;$LIB"
+PATH = "$GITHUB_WORKSPACE/install/bin;C:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.8/bin;$PATH"
+PreferredToolArchitecture = "x64"

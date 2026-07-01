@@ -1,0 +1,184 @@
+name: Build Release
+on:
+  push:
+    # Disable this for forks. Its expensive, and the PyPI portion will fail later
+    if: github.repository_owner == "XFELPP"
+    # For now, only build for release tags
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    # Add specific dispatch action for PyPI -- can disable publishing
+    # Currently need to disable for quota reasons.
+    inputs:
+      publish_to_pypi:
+        description: "Publish compiled wheels to PyPI"
+        type: boolean
+        required: true
+        default: false
+
+jobs:
+  # Build binaries
+  build_wheels:
+    name: Build wheels on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      max-parallel: 6
+      matrix:
+        # windows-latest was updated to MSVC 19.51 which is outside of our supported
+        # compiler matrix so pinned to windows-2022 for now
+        os: [ubuntu-latest, windows-2022, macos-latest]
+
+    steps:
+      # - name: Free Unused Disk Space
+      #   if: runner.os == 'Linux'
+      #   run: |
+      #     sudo rm -rf /usr/share/dotnet
+      #     sudo rm -rf /usr/local/lib/android
+      #     sudo rm -rf /opt/ghc
+      #     sudo rm -rf /usr/local/.ghcup
+      #     sudo rm -rf /usr/share/swift
+      #     sudo rm -rf /usr/lib/jvm
+      #     df -h
+
+      # - name: Create Swap File
+      #   if: runner.os == 'Linux'
+      #   run: |
+      #     sudo fallocate -l 12G /swapfile_xalgospp
+      #     sudo chmod 600 /swapfile_xalgospp
+      #     sudo mkswap /swapfile_xalgospp
+      #     sudo swapon /swapfile_xalgospp
+      #     free -h
+
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0                     # v7
+
+        # MANUALLY try and pull this down. So Windows doesn't break.... every time
+      - name: PRE-DOWNLOAD
+        shell: bash
+        run: |
+          mkdir -p .cibw_cache
+          for i in {1..5}; do
+            curl -L -o .cibw_cache/virtualenv-20.27.1.pyz https://raw.githubusercontent.com/pypa/get-virtualenv/20.27.1/public/virtualenv.pyz && break || sleep 15
+          done
+
+      # Cache pip (for speedup)
+      - name: Cache pip
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9                        # v6
+        with:
+          path: |
+            ~/.cache/pip
+            ~/Library/Caches/pip
+            ~\AppData\Local\pip\Cache
+          key: ${{ runner.os }}-pip-${{ hashFiles('pyproject.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
+
+      # Cache ccache (for speedup)
+      - name: Cache ccache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9                        # v6
+        with:
+          path: .ccache
+          key: ${{ runner.os }}-ccache-${{ github.ref }}
+          restore-keys: |
+            ${{ runner.os }}-ccache-
+
+      # interpreter caching (to avoid running into HTTP request rate limiting)
+      - name: Cache cibuildwheel
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9                        # v6
+        with:
+          path: .cibw_cache
+          key: ${{ runner.os }}-cibw-v1
+          restore-keys: |
+            ${{ runner.os }}-cibw-
+
+      - name: Grab Windows CUDA
+        uses: Jimver/cuda-toolkit@406fa58d8abbf1bad2edd217b58b073dd2f548e4                  # v0.2.34
+        if: runner.os == 'Windows'
+        id: cuda-toolkit
+        with:
+          cuda: '12.8.0'
+          use-github-cache: 'false'
+
+      - name: Clean Strawberry Perl (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $paths = $env:PATH -split ';' | Where-Object { $_ -notlike '*Strawberry*' }
+          $newPath = $paths -join ';'
+          echo "PATH=$newPath" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Enable Developer Command Prompt
+        uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756                  # v1
+        if: runner.os == 'Windows'
+        with:
+          arch: amd64
+
+      - name: Build wheels
+        # Check pyproject.toml for supported versions and additional config
+        uses: pypa/cibuildwheel@294735312765b09d24a2fbec22660ce817587d55                    # v4.1.0
+        env:
+          CIBW_CACHE_PATH: ".cibw_cache"
+          PreferredToolArchitecture: "x64"
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a              # v7.0.1
+        with:
+          name: cibw-wheels-${{ matrix.os }}-${{ strategy.job-index }}
+          path: ./wheelhouse/*.whl
+
+  # Build source distribution
+  build_sdist:
+    name: Build source distribution
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0                     # v7
+
+      - name: Setup Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1                 # v6
+        with:
+          python-version: "3.11" # Shouldn't matter
+
+      # Meson setup runs, so we still need these unfortunately (for subprojects)
+      # The code will not actually be compiled for the sdist
+      - name: Install dependencies
+        run: |
+          sudo apt update
+          sudo apt install -y cmake ninja-build
+
+      - name: Build sdist
+        run: |
+          python -m pip install build
+          python -m build --sdist
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a              # v7.0.1
+        with:
+          name: cibw-sdist
+          path: dist/*.tar.gz
+
+  # Create release, publish
+  create_release_and_publish_to_pypi:
+    needs: [build_wheels, build_sdist]
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write
+      contents: write
+    if: (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')) || github.event_name == 'workflow_dispatch'
+    steps:
+      - name: Gather build artifacts
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c            # v8
+        with:
+          pattern: cibw-*
+          path: dist
+          merge-multiple: true
+
+      - name: Publish to PyPI
+        # Force need to manually specify the PyPI publishing
+        # Currently disabled by default pending quota request
+        if: inputs.publish_to_pypi == true
+        uses: pypa/gh-action-pypi-publish@cef221092ed1bacb1cc03d23a2d87d1d172e277b          # v1.14.0
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@718ea10b132b3b2eba29c1007bb80653f286566b          # v3.0.1
+        with:
+          files: dist/*
+          generate_release_notes: true
