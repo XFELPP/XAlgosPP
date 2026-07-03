@@ -21,6 +21,7 @@
 #define XALGOSPP_DETECTOR_LCLS2_CALIBDB_HH
 
 #include "httplib.h"
+#include "ncarray/ncarrays.hh"
 #include "rapidjson/document.h"
 #include "spdlog/spdlog.h"
 
@@ -28,7 +29,6 @@
 #include <cstdint>
 #include <set>
 #include <string>
-#include <string_view>
 #include <vector>
 
 namespace xalgospp::lcls2 {
@@ -38,19 +38,6 @@ namespace xalgospp::lcls2 {
    * ranges for retrieved constants.
    */
   static constexpr unsigned LCLS_MAX_EXP_RUN_NUM { 9999 };
-
-  /**
-   * A descriptor for a single kind of calibration constants.
-   *
-   * This struct is used when retrieving raw constants from the LCLS2 calibration
-   * database endpoints. It holds the raw bytes along with information on the
-   * underlying datatype and the shape the bytes should be reformed into.
-   */
-  struct CalibrationConstants {
-    std::vector<std::uint8_t> data; ///< Raw byte stream
-    std::string dtype;              ///< The datatype of each element
-    std::vector<std::size_t> shape; ///< The final shape the byte stream should take
-  };
 
   /**
    * Retains information on calibration constants retrieved from metadata queries.
@@ -100,6 +87,27 @@ namespace xalgospp::lcls2 {
   };
 
   /**
+   * A descriptor for a single kind of calibration constants.
+   *
+   * This struct is used when retrieving raw constants from the LCLS2 calibration
+   * database endpoints. It holds the raw bytes along with information on the
+   * underlying datatype and the shape the bytes should be reformed into.
+   */
+  struct CalibrationConstants {
+    std::vector<std::uint8_t> data; ///< Raw byte stream
+    std::string dtype;              ///< The datatype of each element
+    std::vector<std::size_t> shape; ///< The final shape the byte stream should take
+    CalibDocMetadata metadata;      ///< The associated metadata for this set of constants
+
+    /**
+     * Convert the calibration data to an NCArray.
+     *
+     * @returns An NCArrayView over the calibration data.
+     */
+    static ncarray::NCArray to_ncarray(const CalibrationConstants& consts);
+  };
+
+  /**
    * Parse a metadata document retrieved from the calibdb.
    *
    * The metadata documents have the following schema (among others):
@@ -117,7 +125,7 @@ namespace xalgospp::lcls2 {
    * @param[in] meta_doc The document with metadata retrieved from CalibDB.
    * @returns The parsed struct with relevant metadata.
    */
-  CalibDocMetadata parse_metadata_doc(rapidjson::Value& meta_doc);
+  CalibDocMetadata parse_metadata_doc(const rapidjson::Value& meta_doc);
 
   /**
    * Retrieve the `short name` for a detector of given type using its serial number.
@@ -130,9 +138,9 @@ namespace xalgospp::lcls2 {
    * @param[in] det_serial_no The full serial number of the specific detector.
    * @returns The `short name` of the indicated detector.
    */
-  std::string get_detector_short_name(std::string_view base_url,
-                                      std::string_view det_type,
-                                      std::string_view det_serial_no);
+  std::string get_detector_short_name(std::string& base_url,
+                                      std::string& det_type,
+                                      std::string& det_serial_no);
 
   /**
    * Extract the data from the raw byte stream given the provided metadata.
@@ -147,7 +155,7 @@ namespace xalgospp::lcls2 {
    * @param[out] out_buf The buffer to copy the bytes to.
    */
   void load_values_from_byte_stream(const std::uint8_t* byte_stream,
-                                    std::string_view data_dtype,
+                                    const std::string& data_dtype,
                                     std::size_t data_nelem,
                                     std::vector<std::uint8_t>& out_buf);
 
@@ -162,8 +170,8 @@ namespace xalgospp::lcls2 {
    * @returns The vector of split string components.
    */
   template <typename T, class Fn>
-  std::vector<T> split_string(const std::string_view s,
-                              const std::string_view delim,
+  std::vector<T> split_string(const std::string& s,
+                              const std::string& delim,
                               Fn&& cast) {
     std::vector<T> parts;
     std::size_t nextPos { 0 };
@@ -173,7 +181,7 @@ namespace xalgospp::lcls2 {
     while ((nextPos = s.find(delim, lastPos)) != std::string::npos) {
       part = s.substr(lastPos, nextPos - lastPos);
       if (!part.empty()) {
-        parts.push_back(part);
+        parts.push_back(cast(part));
       }
       lastPos = nextPos + 1;
     }
@@ -218,9 +226,9 @@ namespace xalgospp::lcls2 {
    * @param[in] constants_types The type of constants being looked for.
    */
   std::map<std::string, CalibrationConstants>
-  retrieve_calib_constants_of_type(std::string_view base_url,
-                                   std::string_view det_short_name,
-                                   std::string_view experiment,
+  retrieve_calib_constants_of_type(std::string& base_url,
+                                   std::string& det_short_name,
+                                   std::string& experiment,
                                    unsigned run,
                                    std::set<std::string> constants_type);
 

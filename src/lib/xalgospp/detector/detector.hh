@@ -25,6 +25,8 @@
 
 #include "ncarray/layout.hh" // Re-use ncarray's metadata struct for det descr
 
+#include <Eigen/Dense>
+
 #ifdef _WIN32
 #include <BaseTsd.h>
 typedef SSIZE_T ssize_t;
@@ -34,6 +36,7 @@ typedef SSIZE_T ssize_t;
 
 #include <cstdint>
 #include <cstring>
+#include <span>
 
 #ifndef XALGOS_HD
 #ifdef __CUDACC__
@@ -44,6 +47,9 @@ typedef SSIZE_T ssize_t;
 #endif
 
 namespace xalgospp {
+  using det::CalibParameters;
+  using det::PixelCalibStruct;
+
   template <typename T>
   Eigen::Map<Eigen::Array<T, Eigen::Dynamic, 1>>
   ncarray_to_eigen(const ncarray::NCArrayView& view) {
@@ -88,7 +94,7 @@ namespace xalgospp {
 
   class AlgorithmFactory {
   public:
-    static std::unique_ptr<DetectorAlgorithm>
+    static std::unique_ptr<CalibrationAlgorithm>
     create_calibration(const CalibParameters& params, const ncarray::NCArrayView& constants) {
       return std::make_unique<CalibrationAlgorithm>(params, constants);
     }
@@ -101,7 +107,7 @@ namespace xalgospp {
   struct DetectorDescriptor {
     char detector_type[MaxNameSize] { 0 };
     // We'll re-use ncarray's metadata struct for detector descriptions (GPU friendly)
-    Metadata shape;
+    ncarray::Metadata shape;
     CalibParameters calib_params;
 
     XALGOS_HD inline bool operator<(const DetectorDescriptor& other) const {

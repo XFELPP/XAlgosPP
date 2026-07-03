@@ -21,12 +21,10 @@
 
 #include <cstdint>
 #include <string>
-#include <string_view>
 
 namespace xalgospp {
-  std::uint32_t timestamp_from_bson_object_id(std::string_view oid) {
+  std::uint32_t timestamp_from_bson_object_id(std::string& oid) {
     return static_cast<std::uint32_t>(std::stoul(oid.substr(0, 8), nullptr, 16));
   }
 } // namespace xalgospp
 
-#endif // XALGOSPP_UTILITIES_MONGODB_HH

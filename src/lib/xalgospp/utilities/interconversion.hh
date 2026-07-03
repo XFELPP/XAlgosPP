@@ -23,9 +23,9 @@
 #include "ncarray/dtype.hh"
 
 #include <stdexcept>
-#include <string_view>
+#include <string>
 
-namespace XAlgosPP {
+namespace xalgospp {
   /**
    * Error indicating an unknown, unrecognized, or invalid type representation.
    */
@@ -48,7 +48,7 @@ namespace XAlgosPP {
    * @exception invalid_type_string Thrown if the dtype_str is an unrecognized type
    *            representation.
    */
-  ncarray::DType string_to_dtype(std::string_view dtype_str) {
+  ncarray::DType string_to_dtype(const std::string& dtype_str) {
     if (dtype_str == "bool" || dtype_str == "bool_") {
       return ncarray::DType::bool_;
     } else if (dtype_str == "char" || dtype_str == "char_") {

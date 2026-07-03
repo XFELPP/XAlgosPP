@@ -290,18 +290,12 @@ if not rapidjson_dep.found()
 endif
 deps_for_xalgospp += rapidjson_dep
 
-#fmt_dep = dependency('fmt', required: false)
 spdlog_dep = dependency('spdlog', required: false)
 if not spdlog_dep.found()
     message('spdlog not found - using subproject')
-    #if not fmt_dep.found()
-    #    fmt_proj = subproject('fmt')
-    #    fmt_dep = fmt_proj.get_variable('fmt_dep')
-    #endif
     spdlog_proj = subproject('spdlog')
     spdlog_dep = spdlog_proj.get_variable('spdlog_dep')
 endif
-#deps_for_xalgospp += fmt_dep
 deps_for_xalgospp += spdlog_dep
 
 if build_python_opt

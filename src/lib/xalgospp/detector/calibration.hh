@@ -24,8 +24,11 @@
 #include "ncarray/dtype.hh"
 #include "ncarray/ncarrays.hh"
 
+#include <Eigen/Dense>
+
 #include <cstddef>
 #include <cstdint>
+#include <span>
 
 namespace xalgospp::det {
   // Setup a Float2 vector as our pixel calibration struct
