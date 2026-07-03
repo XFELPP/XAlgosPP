@@ -20,25 +20,122 @@
 #ifndef XALGOSPP_ALGORITHM_HH
 #define XALGOSPP_ALGORITHM_HH
 
+#include "xalgospp/parameters.hh"
+
+#include "ncarray/storage.hh" // HostTag/DevTag
 #include "ncarray/ncarrays.hh"
 
-namespace xalgospp {
+#ifdef __CUDACC__
 
-  template <class Derived>
-  class AlgorithmBase {
+#include <cuda/std/tuple>
+
+namespace hd_std = cuda::std;
+
+#ifndef XALG_HD
+#define XALG_HD __host__ __device__
+#endif
+
+#else
+
+#include <tuple>
+
+namespace hd_std = std;
+
+#ifndef XALG_HD
+#define XALG_HD
+#endif
+
+#endif // __CUDACC__
+
+namespace xalgospp {
+  /**
+   * Base Algorithm class.
+   *
+   * All algorithms in XAlgosPP derive from this basic class. An Algorithm is simply
+   * a wrapper which consists of the following states/life-cycle stages:
+   * 1. Construction/configuration - The algorithm is setup with input parameters.
+   * 2. Staging [OPTIONAL] - The algorithm may optionally have a staging step when
+   *    appropriate. This allows for performing auxiliary actions like determining
+   *    extra metadata that may be useful for processing.
+   * 3. Processing - Various APIs/interfaces are provided to run the actual
+   *    algorithm.
+   *
+   * Furthermore, each algorithm will define, via type aliases, the inputs and
+   * outputs that it can accept, along with the type of Parameters object it requires.
+   *
+   * @tparam Derived CRTP subclass type.
+   * @tparam Tag An indicator of whether the algorithm is to operate on host or device
+   *         memory.
+   */
+  template <class Derived, typename Tag = ncarray::HostTag>
+  class Algorithm {
   public:
+    Algorithm() = default;
+
+    using Input = type_list<>;
+    using Output = type_list<>;
+
+    /**
+     * Perform configuration of the algorithm given an input set of parameters.
+     *
+     * @tparam Params The type of the Parameters to use.
+     * @param[in] params The Algorithm-specific Parameters to use.
+     */
+    template <typename Params> void configure(const Params& params) {
+      if constexpr (requires { static_cast<Derived*>(this)->configure_impl(params); }) {
+        static_cast<Derived*>(this)->configure_impl(params);
+      }
+    }
+
+    /**
+     * Optional stage to perform associated actions before processing.
+     *
+     * An algorithm implementation may optionally provide a staging routine when
+     * associated steps, e.g. for metadata retreival, would be useful.
+     */
+    void stage() {
+      if constexpr (requires { static_cast<Derived*>(this)->stage_impl(); }) {
+        static_cast<Derived*>(this)->stage_impl();
+      }
+    }
+
+    template <typename... Inputs, typename... Outputs>
+    void process(const hd_std::tuple<Inputs...>& inputs,
+                 hd_std::tuple<Outputs...>& outputs) {
+      static_cast<Derived*>(this)->process_impl(inputs, outputs);
+    }
+
+    template <typename... Inputs, typename... Outputs>
+    void operator()(const hd_std::tuple<Inputs...>& inputs,
+                    hd_std::tuple<Outputs...>& outputs) {
+      static_cast<Derived*>(this)->process_impl(inputs, outputs);
+    }
+
+    template <typename Input, typename Output>
+    void process(const Input& input, Output& output) const {
+      if constexpr (requires {
+          static_cast<const Derived*>(this)->process_impl(input, output);
+        }) {
+        static_cast<const Derived*>(this)->process_impl(input, output);
+      } else {
+        auto in_t { hd_std::forward_as_tuple(input) };
+        auto out_t { hd_std::forward_as_tuple(output) };
+
+        static_cast<const Derived*>(this)->process_impl(in_t, out_t);
+      }
+    }
+
+    template <typename Input, typename Output>
+    void operator()(const Input& input, Output& output) {
+      process(input, output);
+    }
+
     const char* name() const {
       if constexpr (requires { static_cast<const Derived*>(this)->name_impl(); }) {
         return static_cast<const Derived*>(this)->name_impl();
       }
 
       return "UnnamedAlgorithm";
-    }
-
-    void process(const ncarray::NCArrayView& input, ncarray::NCArrayView& output) {
-      if constexpr (requires { static_cast<Derived*>(this)->process_impl(input, output); }) {
-        static_cast<Derived*>(this)->process_impl(input, output);
-      }
     }
   };
 } // namespace xalgospp
