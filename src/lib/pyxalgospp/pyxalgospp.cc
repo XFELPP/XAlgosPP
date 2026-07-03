@@ -17,7 +17,8 @@
  * this program. If not, see <https://www.gnu.org/licenses/>.
  */
 
-#include "xalgospp/detector/detector.hh"
+#include "xalgospp/algorithm.hh"
+#include "xalgospp/detector/calibration.hh"
 #include "xalgospp/detector/lcls2/calibdb.hh"
 
 #include "spdlog/cfg/env.h"
@@ -36,28 +37,59 @@ PYBIND11_MODULE(_pyxalgospp, pyxalgospp_module, py::mod_gil_not_used()) {
 
   spdlog::cfg::load_env_levels("PYXALGOSPP_LOG_LEVEL");
 
-  py::classh<xalgospp::det::CalibParameters>(pyxalgospp_module, "CalibParameters")
-    .def(py::init<>())
-    .def_readwrite("gain_shift", &xalgospp::det::CalibParameters::gain_shift)
-    .def_readwrite("gain_mask", &xalgospp::det::CalibParameters::gain_mask)
-    .def_readwrite("data_mask", &xalgospp::det::CalibParameters::data_mask)
-    .def_readwrite("num_gains", &xalgospp::det::CalibParameters::num_gains)
-    .def_readwrite("invalid_pattern", &xalgospp::det::CalibParameters::invalid_pattern)
-    .def_readwrite("invalid_value", &xalgospp::det::CalibParameters::invalid_value)
-    .def_property("mapping",
-                  [](const xalgospp::det::CalibParameters& self) { return self.mapping; },
-                  [](xalgospp::det::CalibParameters& self,
-                     xalgospp::det::CalibParameters::MappingMode mode) {
-                    self.mapping = mode;
-                  });
-
   py::enum_<xalgospp::det::CalibParameters::MappingMode>(pyxalgospp_module, "MappingMode")
     .value("Direct", xalgospp::det::CalibParameters::MappingMode::Direct)
     .value("Epix10k", xalgospp::det::CalibParameters::MappingMode::Epix10k)
     .export_values();
 
-  pyxalgospp_module.attr("JungfrauCalibParameters") = xalgospp::det::JungfrauCalibParameters;
-  pyxalgospp_module.attr("Epix10kCalibParameters") = xalgospp::det::Epix10kCalibParameters;
+  using RtCalibration = xalgospp::det::Calibration<xalgospp::det::RuntimeCalibPolicy>;
+  py::classh<RtCalibration::Params>(pyxalgospp_module, "CalibrationParams")
+    .def(py::init<>())
+    .def_readwrite("base_url", &RtCalibration::Params::base_url)
+    .def_readwrite("det_type", &RtCalibration::Params::det_type)
+    .def_readwrite("det_serial_no", &RtCalibration::Params::det_serial_no)
+    .def_readwrite("experiment", &RtCalibration::Params::experiment)
+    .def_readwrite("run", &RtCalibration::Params::run)
+
+    .def_readwrite("gain_shift", &RtCalibration::Params::gain_shift)
+    .def_readwrite("gain_mask", &RtCalibration::Params::gain_mask)
+    .def_readwrite("data_mask", &RtCalibration::Params::data_mask)
+    .def_readwrite("num_gains", &RtCalibration::Params::num_gains)
+    .def_readwrite("default_gain", &RtCalibration::Params::default_gain)
+    .def_readwrite("invalid_pattern", &RtCalibration::Params::invalid_pattern)
+    .def_readwrite("invalid_value", &RtCalibration::Params::invalid_value)
+    .def_property("mapping",
+                  [](const RtCalibration::Params& self) { return self.mapping; },
+                  [](RtCalibration::Params& self,
+                     xalgospp::det::CalibParameters::MappingMode mode) {
+                    self.mapping = mode;
+                  });
+  py::classh<RtCalibration>(pyxalgospp_module, "Calibration")
+    .def(py::init<>())
+    .def(py::init<RtCalibration::Params>(), py::arg("params"))
+    .def("configure",
+         [](RtCalibration& self, const RtCalibration::Params& params) {
+           self.configure(params);
+         },
+         py::arg("params"))
+    .def("print_configuration", &RtCalibration::print_configuration)
+    .def("stage", [](RtCalibration& self) { self.stage(); })
+    .def("process",
+         [](const RtCalibration& self,
+            const ncarray::NCArrayView& input,
+            ncarray::NCArrayView& output) {
+           return self.process(input, output);
+         },
+         py::arg("input"),
+         py::arg("output"))
+    .def("__call__",
+         [](const RtCalibration& self,
+            const ncarray::NCArrayView& input,
+            ncarray::NCArrayView& output) {
+           return self.process(input, output);
+         },
+         py::arg("input"),
+         py::arg("output"));
 
   py::classh<xalgospp::lcls2::CalibDocMetadata>(pyxalgospp_module, "CalibDocMetadata")
     .def_readonly("unix_timestamp", &xalgospp::lcls2::CalibDocMetadata::doc_unix_ts)
@@ -96,22 +128,4 @@ PYBIND11_MODULE(_pyxalgospp, pyxalgospp_module, py::mod_gil_not_used()) {
                         py::arg("experiment"),
                         py::arg("run"),
                         py::arg("constants_types"));
-
-  // Bind Detector Algorithm flow
-  //py::classh<xalgospp::DetectorAlgorithm, std::unique_ptr<xalgospp::DetectorAlgorithm>>(pyxalgospp_module,
-  //                                                                                      "DetectorAlgorithm")
-  /*
-  py::classh<xalgospp::DetectorAlgorithm>(pyxalgospp_module, "DetectorAlgorithm")
-    .def_property_readonly("name", &xalgospp::DetectorAlgorithm::name)
-    .def("process",
-         &xalgospp::DetectorAlgorithm::process,
-         py::arg("input"),
-         py::arg("output"));
-
-  py::classh<xalgospp::AlgorithmFactory>(pyxalgospp_module, "AlgorithmFactory")
-    .def_static("create_calibration",
-                &xalgospp::AlgorithmFactory::create_calibration,
-                py::arg("params"),
-                py::arg("constants"));
-  */
 } // pyxalgospp_module
