@@ -171,51 +171,6 @@ else
     endforeach
 endif
 
-#### Core Dependencies ####
-###########################
-
-openmp_dep = dependency('openmp', required: false)
-xalg_has_openmp = openmp_dep.found()
-if nca_has_openmp
-    add_project_arguments('-DXALG_HAS_OPENMP', language: ['cpp', 'cuda'])
-endif
-
-deps_for_xalgospp = []
-if xalg_has_cuda
-    # Add libdl as needed for JIT if not merged directly into the cstdlib
-    dl_dep = cpp.find_library('dl', required: false)
-    if dl_dep.found()
-        deps_for_xalgospp += dl_dep
-    endif
-
-    # CUDA driver and nvrtc are both for JIT
-    cuda_dep = dependency('cuda', modules: ['cuda', 'cudart', 'nvrtc'])
-    deps_for_xalgospp += cuda_dep
-
-    # On Windows need symbol demangling for the JIT compiler.
-    dbghelp_dep = []
-    if cpp.get_id() == 'msvc'
-        dbghelp_dep = [cpp.find_library('dbghelp', required: true)]
-    endif
-endif
-
-if xalg_has_openmp
-    deps_for_xalgospp += openmp_dep
-endif
-
-if build_python_opt
-    pybind11_dep = dependency('pybind11', required: true)
-endif
-
-## Eigen
-# eigen_dep = dependency('eigen3')
-
-## ncarray
-# ncarray_dep = dependency('ncarray')
-
-## MPI
-# mpi_dep = dependency('mpi', language: 'cpp', required: true)
-
 #### Main Python Setup ####
 ###########################
 
@@ -228,6 +183,134 @@ min_python_ver = '3.8'
 py_ver = py3.language_version()
 if py_ver.version_compare(f'<@min_python_ver@')
     error(f'Minimum supported Python version is @min_python_ver@, found @py_ver@')
+endif
+
+#### Core Dependencies ####
+###########################
+deps_for_xalgospp = []
+
+if xalg_has_cuda
+    # CUDA driver and nvrtc are both for JIT
+    cuda_dep = dependency('cuda', modules: ['cuda', 'cudart', 'nvrtc'])
+    deps_for_xalgospp += cuda_dep
+
+    # On Windows need symbol demangling for the JIT compiler.
+    dbghelp_dep = []
+    if cpp.get_id() == 'msvc'
+        dbghelp_dep = [cpp.find_library('dbghelp', required: true)]
+    endif
+    deps_for_xalgospp += dbghelp_dep
+endif
+
+cpp_httplib_dep = dependency('cpp-httplib', required: false)
+if not cpp_httplib_dep.found()
+    message('cpp-httplib not found - using subproject')
+    # cpp-httplib deps:
+    brotli_proj = subproject('google-brotli')
+    zlib_proj = subproject('zlib')
+
+    # Now build
+    cpp_httplib_proj = subproject('cpp-httplib')
+    cpp_httplib_dep = cpp_httplib_proj.get_variable('cpp_httplib_dep')
+endif
+deps_for_xalgospp += cpp_httplib_dep
+
+# Add libdl as needed for JIT if not merged directly into the cstdlib
+# dl_dep = cpp.find_library('dl', required: false)
+# if dl_dep.found()
+#     deps_for_xalgospp += dl_dep
+# endif
+
+## Eigen
+eigen_dep = dependency('eigen', required: false)
+if not eigen_dep.found()
+    message('eigen not found - using subproject')
+    eigen_dep = dependency('eigen3')
+    deps_for_xalgospp += eigen_dep
+endif
+deps_for_xalgospp += eigen_dep
+
+## MPI
+# mpi_dep = dependency('mpi', language: 'cpp', required: true)
+# deps_for_xalgospp += mpi_dep
+
+## ncarray
+libncarray = cpp.find_library('ncarray', required: false)
+if libncarray.found()
+    ncarray_dep = libncarray
+else
+    message('ncarray not found via `find_library` - checking via Python')
+    nc_libs_raw = run_command(
+        py3, '-c',
+        'import glob, ncarray; print("\\n".join(glob.glob(f"{ncarray.get_lib_dir()}/libnc*")))',
+        check: false,
+    ).stdout().strip().split('\n')
+
+    if (nc_libs_raw.length() == 0) or (nc_libs_raw.length() == 1  and nc_libs_raw[0] == '')
+        message('ncarray not found via Python - will use subproject.')
+        ncarray_proj = subproject('ncarray')
+        ncarray_dep = ncarray_proj.get_variable('ncarray_dep')
+    else
+        fs = import('fs')
+        nc_link_args = []
+        foreach lib : nc_libs_raw
+            libdir = fs.parent(lib)
+            libname = fs.name(lib)
+            nc_link_args += [
+                '-L' + libdir,
+                '-l:' + libname,
+            ]
+        endforeach
+
+        nc_inc = run_command(
+            py3, '-c', 'import ncarray; print(ncarray.get_include())',
+            check: false,
+        ).stdout().strip()
+
+        ncarray_dep = declare_dependency(
+            link_args: nc_link_args,
+            include_directories: include_directories(nc_inc),
+        )
+    endif # if nca_libs_raw empty (Python search for ncarray)
+endif
+deps_for_xalgospp += ncarray_dep
+
+# openmp_dep = dependency('openmp', required: false)
+# xalg_has_openmp = openmp_dep.found()
+# if xalg_has_openmp
+#     add_project_arguments('-DXALG_HAS_OPENMP', language: ['cpp', 'cuda'])
+#     deps_for_xalgospp += openmp_dep
+# endif
+
+rapidjson_dep = dependency('rapidjson', required: false)
+if not rapidjson_dep.found()
+    message('rapidjson not found - using subproject')
+    rapidjson_proj = subproject('rapidjson')
+    rapidjson_dep = rapidjson_proj.get_variable('rapidjson_dep')
+endif
+deps_for_xalgospp += rapidjson_dep
+
+#fmt_dep = dependency('fmt', required: false)
+spdlog_dep = dependency('spdlog', required: false)
+if not spdlog_dep.found()
+    message('spdlog not found - using subproject')
+    #if not fmt_dep.found()
+    #    fmt_proj = subproject('fmt')
+    #    fmt_dep = fmt_proj.get_variable('fmt_dep')
+    #endif
+    spdlog_proj = subproject('spdlog')
+    spdlog_dep = spdlog_proj.get_variable('spdlog_dep')
+endif
+#deps_for_xalgospp += fmt_dep
+deps_for_xalgospp += spdlog_dep
+
+if build_python_opt
+    pybind11_dep = dependency('pybind11', required: false)
+    if not pybind11_dep.found()
+        message('pybind11 not found, but required for Python bindings - will build subproject.')
+        pybind11_proj = subproject('pybind11')
+        pybind11_dep = pybind11_proj.get_variable('pybind11_dep')
+    endif # pybind11 not found
 endif
 
 #### Path Setup ####
@@ -310,10 +393,8 @@ installed_utilities_headers = [
     'src/lib/xalgospp/utilities/mongodb.hh',
 ]
 
-#### Test executables ####
-##########################
-subdir('tests')
-
+#### Core Library ####
+######################
 xalgospp_headers = include_directories('src/lib', 'src/lib/xalgospp')
 
 if build_core_opt
@@ -327,7 +408,7 @@ if build_core_opt
         dependencies: deps_for_xalgospp,
         include_directories: xalgospp_headers,
         install: true,
-        install_dir: libncarray_install_dir,
+        install_dir: libxalgospp_install_dir,
         install_rpath: lib_install_rpath,
         version: '1',
         soversion: '1',
@@ -371,9 +452,12 @@ else
     )
 endif # end build_core_opt
 
+
+#### Python Bindings ####
+#########################
 if build_python_opt
     # Figure out dependencies
-    deps_for_py_mod = [xalgospp_dep, pybind11_dep, py3_dep]
+    deps_for_py_mod = deps_for_xalgospp + [ncarray_dep, pybind11_dep, py3_dep, xalgospp_dep]
 
     # If building bindings as a wheel, install the headers into the package itself
     # If not building as a wheel, then these should be installed in prefix/include when
@@ -416,6 +500,10 @@ if build_python_opt
         dependencies : deps_for_py_mod,
         install_rpath: py_to_lib_install_rpath,
         build_rpath: py_to_lib_install_rpath,
-        link_args: py_mod_link_args,
+        # link_args: py_mod_link_args,
     )
 endif # build_python_opt
+
+#### Test executables ####
+##########################
+# subdir('tests')
