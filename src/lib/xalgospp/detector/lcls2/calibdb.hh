@@ -27,8 +27,10 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <set>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace xalgospp::lcls2 {
@@ -208,6 +210,16 @@ namespace xalgospp::lcls2 {
    */
   void deserialize_json_dict(rapidjson::Value& json_dict,
                              std::map<std::string, CalibrationConstants>& constants);
+
+  /**
+   * Check whether a retrieved metadata document has an appropriate validity range.
+   *
+   * @param[in] metadata_doc The retrieved constants metadata document.
+   * @param[in] target_run The target run number for which the document should be valid.
+   * @returns Returns the begin and end run if valid (for later sorting); otherwise nullopt.
+   */
+  std::optional<std::pair<unsigned, unsigned>>
+  is_doc_valid_for_run(const rapidjson::Value& metadata_doc, unsigned target_run);
 
   /**
    * For the provided short name get most recent valid constants for the experiment/run.

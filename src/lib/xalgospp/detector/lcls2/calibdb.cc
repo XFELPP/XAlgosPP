@@ -38,9 +38,11 @@ typedef SSIZE_T ssize_t;
 #include <cstddef>
 #include <cstdint>
 #include <map>
+#include <optional>
 #include <set>
 #include <stdfloat>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace xalgospp::lcls2 {
@@ -296,7 +298,79 @@ namespace xalgospp::lcls2 {
     return metadata;
   }
 
-  //std::pair<std::vector<std::uint8_t>, std::vector<std::size_t>>
+  std::optional<std::pair<unsigned, unsigned>>
+  is_doc_valid_for_run(const rapidjson::Value& metadata_doc, unsigned target_run) {
+    auto logger = spdlog::get("XAlgosPP::LCLS2::CalibDB");
+    if (!logger) {
+      logger = spdlog::stdout_color_mt("XAlgosPP::LCLS2::CalibDB");
+    }
+
+    auto is_int = [](std::string& sv) -> bool {
+      if (sv.empty()) {
+        return false;
+      }
+
+      int val;
+      auto [ptr, ec] = std::from_chars(sv.data(), sv.data() + sv.size(), val);
+
+      return ec == std::errc{} && ptr == sv.data() + sv.size();
+    };
+
+    // Check validity
+    unsigned run_begin { 0 };
+    if (metadata_doc.HasMember("run")) {
+      if (metadata_doc["run"].IsInt()) {
+        run_begin = static_cast<unsigned>(metadata_doc["run"].GetInt());
+      } else if (metadata_doc["run"].IsString()) {
+        run_begin = static_cast<unsigned>(std::stoul(metadata_doc["run"].GetString()));
+      } else {
+        logger->warn("[LCLS2][RunValidity] Skipping document with invalid run!");
+        return std::nullopt;
+      }
+      if (run_begin > LCLS_MAX_EXP_RUN_NUM) {
+        logger->debug("[LCLS2][RunValidity] Skipping doc with begin run past max: {}.",
+                      run_begin);
+        return std::nullopt;
+      }
+    }
+
+    if (target_run < run_begin) {
+      // If the run_begin starting validity is after this run, skip
+      logger->trace("[LCLS2][RunValidity] Skipping doc begin run after target: {} > {}.",
+                    run_begin,
+                    target_run);
+      return std::nullopt;
+    }
+
+    unsigned run_end { 0 };
+    if (metadata_doc.HasMember("run_end")) {
+      std::string run_end_str = metadata_doc["run_end"].GetString();
+      if (is_int(run_end_str)) {
+        run_end = static_cast<unsigned>(std::stoul(run_end_str));
+        if (run_end > LCLS_MAX_EXP_RUN_NUM) {
+          logger->debug("[LCLS2][RunValidity] Skipping doc with end run past max: {}.",
+                        run_end);
+          return std::nullopt;
+        }
+      } else if (run_end_str == "end") {
+        run_end = LCLS_MAX_EXP_RUN_NUM;
+      } else {
+        logger->debug("[LCLS2][RunValidity] Skipping doc with invalid end run: {}.",
+                      run_end_str);
+        return std::nullopt;
+      }
+    }
+
+    if (run_end < target_run) {
+      logger->trace("[LCLS2][RunValidity] Skipping doc end run before target: {} < {}.",
+                    run_end,
+                    target_run);
+      return std::nullopt;
+    }
+
+    return std::make_optional(std::make_pair(run_begin, run_end));
+  }
+
   std::map<std::string, CalibrationConstants>
   retrieve_calib_constants_of_type(std::string& base_url,
                                    std::string& det_short_name,
@@ -314,6 +388,8 @@ namespace xalgospp::lcls2 {
       return {};
     }
 
+    logger->debug("[LCLS2][load_constants] Trying URL: {}", base_url);
+
     httplib::Client cli(base_url); // "https://pswww.slac.stanford.edu"
 
     // Try to use the "experiment" DB first. If nothing found, fallback on "detector" DB
@@ -322,130 +398,23 @@ namespace xalgospp::lcls2 {
     logger->debug("[LCLS2][{}] Attempting to get constants for {}",
                   endpoint,
                   det_short_name);
+    std::string data_doc_id{""};
+
+    std::map<std::string, CalibrationConstants> constants_map; // Per-ctype constants
     for (const auto& ct : constants_types) {
       logger->debug("------ Looking for constants of type: {}", ct);
-    }
 
-    std::string data_doc_id { "" };
-    std::map<std::string, std::vector<CalibDocMetadata>> metadata_docs;
-    if (auto res = cli.Get(endpoint)) {
-      if (res->status == 200) {
-        rapidjson::Document docs;
-        docs.Parse(res->body.c_str());
-        if (!docs.IsArray()) {
-          logger->debug("[LCLS2][{}] CalibDB response was not a list of docs - Will try detector DB.",
-                        endpoint);
-        } else {
-          for (const auto& doc : docs.GetArray()) {
-            if (!doc.IsObject()) {
-              continue;
-            }
-
-            if (!doc.HasMember("ctype")) {
-              logger->debug("[LCLS2][{}] Skipping document without ctype!", endpoint);
-              continue;
-            }
-            std::string doc_constants_type { doc["ctype"].GetString() };
-
-            if (constants_types.find(doc_constants_type) == constants_types.end()) {
-              continue;
-            }
-
-            // Check validity
-            unsigned run_begin { 0 };
-            if (doc.HasMember("run")) {
-              if (doc["run"].IsInt()) {
-                run_begin = static_cast<unsigned>(doc["run"].GetInt());
-              } else if (doc["run"].IsString()) {
-                run_begin = static_cast<unsigned>(std::stoul(doc["run"].GetString()));
-              } else {
-                logger->warn("[LCLS2][{}] Skipping document with invalid run!", endpoint);
-                continue;
-              }
-              if (run_begin > LCLS_MAX_EXP_RUN_NUM) {
-                logger->debug("[LCLS2][{}] Skipping doc with begin run past max: {}.",
-                              endpoint,
-                              run_begin);
-                continue;
-              }
-            }
-
-            if (run < run_begin) {
-              // If the run_begin starting validity is after this run, skip
-              continue;
-            }
-
-            unsigned run_end { 0 };
-            if (doc.HasMember("run_end")) {
-              auto is_int = [](std::string& sv) -> bool {
-                if (sv.empty()) {
-                  return false;
-                }
-
-                int val;
-                auto [ptr, ec] = std::from_chars(sv.data(), sv.data() + sv.size(), val);
-
-                return ec == std::errc{} && ptr == sv.data() + sv.size();
-              };
-
-              std::string run_end_str = doc["run_end"].GetString();
-              if (is_int(run_end_str)) {
-                run_end = static_cast<unsigned>(std::stoul(run_end_str));
-                if (run_end > LCLS_MAX_EXP_RUN_NUM) {
-                  logger->debug("[LCLS2][{}] Skipping doc with end run past max: {}.",
-                                endpoint,
-                                run_end);
-                  continue;
-                }
-              } else if (run_end_str == "end") {
-                run_end = LCLS_MAX_EXP_RUN_NUM;
-              } else {
-                logger->debug("[LCLS2][{}] Skipping doc with invalid end run: {}.",
-                              endpoint,
-                              run_end_str);
-                continue;
-              }
-            }
-
-            if (run > run_end) {
-              // If the run_end ending validity is before this run, skip
-              continue;
-            }
-
-            CalibDocMetadata metadata = parse_metadata_doc(doc);
-            if (!metadata_docs.count(doc_constants_type)) {
-              metadata_docs[doc_constants_type] = std::vector<CalibDocMetadata>();
-            }
-
-            metadata.consts_name = doc_constants_type;
-            metadata.doc_run_begin = run_begin;
-            metadata.doc_run_end = run_end;
-            metadata_docs[doc_constants_type].push_back(metadata);
-
-            logger->trace("[LCLS2][{}] Possible candidate constants have ID: {}",
-                          endpoint,
-                          metadata.data_doc_id);
-          }
-        }
-      } else {
-        logger->error("[LCLS2][{}] Call to endpoint returned non-200 status {} - skipping!",
-                      endpoint,
-                      res->status);
-      }
-    }
-
-    if (metadata_docs.empty()) {
-      // Couldn't get anything from experiment endpoint
-      db_in_use = "cdb_" + det_short_name;
-      endpoint = "/calib_ws/" + db_in_use + "/" + det_short_name;
-      logger->debug("[LCLS2][{}] Falling back to detector endpoint.", endpoint);
-
+      // Procedure for each of the types passed in the inital set:
+      // - Select all candidate metadata documents that have valid run range.
+      // - Sort those, and select the back (see CalibDocMetadata for sort alg.)
+      // - Use the selected metadata's bulk data ID to make final request for constants
+      std::vector<CalibDocMetadata> docs_for_ctype;
       if (auto res = cli.Get(endpoint)) {
         if (res->status == 200) {
           rapidjson::Document docs;
           docs.Parse(res->body.c_str());
           if (!docs.IsArray()) {
-            logger->error("[LCLS2][{}] CalibDB response was not a list of docs!",
+            logger->debug("[LCLS2][{}] CalibDB response was not a list of docs - Will try detector DB.",
                           endpoint);
           } else {
             for (const auto& doc : docs.GetArray()) {
@@ -453,76 +422,34 @@ namespace xalgospp::lcls2 {
                 continue;
               }
 
+              if (!doc.HasMember("ctype")) {
+                logger->debug("[LCLS2][{}] Skipping document without ctype!", endpoint);
+                continue;
+              }
               std::string doc_constants_type { doc["ctype"].GetString() };
 
-              if (constants_types.find(doc_constants_type) == constants_types.end()) {
+              if (doc_constants_type != ct) {
                 continue;
               }
 
               // Check validity
-              unsigned run_begin { 0 };
-              if (doc.HasMember("run")) {
-                run_begin = static_cast<unsigned>(std::stoul(doc["run"].GetString()));
-                if (run_begin > LCLS_MAX_EXP_RUN_NUM) {
-                  logger->debug("[LCLS2][{}] Skipping doc with begin run past max: {}.",
-                                endpoint,
-                                run_begin);
-                  continue;
-                }
-              }
-
-              if (run < run_begin) {
-                // If the run_begin starting validity is after this run, skip
+              auto valid_run_range = is_doc_valid_for_run(doc, run);
+              if (!valid_run_range.has_value()) {
+                // Not valid range
                 continue;
               }
 
-              unsigned run_end { 0 };
-              if (doc.HasMember("run_end")) {
-                auto is_int = [](std::string& sv) -> bool {
-                  if (sv.empty()) {
-                    return false;
-                  }
+              auto [run_begin, run_end] = *valid_run_range;
 
-                  int val;
-                  auto [ptr, ec] = std::from_chars(sv.data(), sv.data() + sv.size(), val);
-
-                  return ec == std::errc{} && ptr == sv.data() + sv.size();
-                };
-
-                std::string run_end_str = doc["run_end"].GetString();
-                if (is_int(run_end_str)) {
-                  run_end = static_cast<unsigned>(std::stoul(run_end_str));
-                  if (run_end > LCLS_MAX_EXP_RUN_NUM) {
-                    logger->debug("[LCLS2][{}] Skipping doc with end run past max: {}.",
-                                  endpoint,
-                                  run_end);
-                    continue;
-                  }
-                } else if (run_end_str == "end") {
-                  run_end = LCLS_MAX_EXP_RUN_NUM;
-                } else {
-                  logger->debug("[LCLS2][{}] Skipping doc with invalid end run: {}.",
-                                endpoint,
-                                run_end_str);
-                  continue;
-                }
-              }
-
-              // Really --- Here would need to do the run validity checks!!!
               CalibDocMetadata metadata = parse_metadata_doc(doc);
-              if (!metadata_docs.count(doc_constants_type)) {
-                metadata_docs[doc_constants_type] = std::vector<CalibDocMetadata>();
-              }
-
               metadata.consts_name = doc_constants_type;
               metadata.doc_run_begin = run_begin;
               metadata.doc_run_end = run_end;
-              metadata_docs[doc_constants_type].push_back(metadata);
+              docs_for_ctype.push_back(metadata);
 
               logger->trace("[LCLS2][{}] Possible candidate constants have ID: {}",
                             endpoint,
                             metadata.data_doc_id);
-              metadata_docs[doc_constants_type].push_back(metadata);
             }
           }
         } else {
@@ -531,83 +458,123 @@ namespace xalgospp::lcls2 {
                         res->status);
         }
       }
-    }
 
-    std::vector<CalibDocMetadata> final_metadata_docs;
-    for (const auto& [const_type, metadata_docs_for_type] : metadata_docs) {
-      std::vector<CalibDocMetadata> valid_docs;
-      for (const auto& doc : metadata_docs_for_type) {
-        if (run >= doc.doc_run_begin && run <= doc.doc_run_end) {
-          valid_docs.push_back(doc);
-        }
-      }
+      if (docs_for_ctype.empty()) {
+        // Couldn't get anything from experiment endpoint
+        db_in_use = "cdb_" + det_short_name;
+        endpoint = "/calib_ws/" + db_in_use + "/" + det_short_name;
+        logger->debug("[LCLS2][{}] Falling back to detector endpoint.", endpoint);
 
-      if (!valid_docs.empty()) {
-        std::sort(valid_docs.begin(), valid_docs.end());
+        if (auto res = cli.Get(endpoint)) {
+          if (res->status == 200) {
+            rapidjson::Document docs;
+            docs.Parse(res->body.c_str());
+            if (!docs.IsArray()) {
+              logger->error("[LCLS2][{}] CalibDB response was not a list of docs!",
+                            endpoint);
+            } else {
+              for (const auto& doc : docs.GetArray()) {
+                if (!doc.IsObject()) {
+                  continue;
+                }
 
-        final_metadata_docs.push_back(valid_docs.back());
+                std::string doc_constants_type { doc["ctype"].GetString() };
 
-        logger->debug("[LCLS2][Validity] Selected best doc for constants type '{}' (begin={}, end={}, ts={})",
-                      const_type,
-                      valid_docs.back().doc_run_begin,
-                      valid_docs.back().doc_run_end,
-                      valid_docs.back().doc_unix_ts);
-      } else {
-        logger->warn("[LCLS2][Validity] No valid calibration document found for ctype '{}' at run {}",
-                     const_type,
-                     run);
-      }
-    }
+                if (doc_constants_type != ct) {
+                  continue;
+                }
 
-    // Now get the data using data_doc_id
-    std::map<std::string, CalibrationConstants> constants_map;
-    for (const auto& metadata : final_metadata_docs) {
-      CalibrationConstants constants;
-      std::string data_endpoint { "/calib_ws/" + db_in_use + "/gridfs/" + metadata.data_doc_id };
-      if (auto res = cli.Get(data_endpoint)) {
-        if (res->status != 200) {
-          logger->error("[LCLS2][{}] Call for data returned non-200 status {} - skipping!",
-                        data_endpoint,
-                        res->status);
-          continue;
-        }
-        // Store the metadata in the final struct in case its needed
-        constants.metadata = metadata;
+                // Check validity
+                auto valid_run_range = is_doc_valid_for_run(doc, run);
+                if (!valid_run_range.has_value()) {
+                  // Not valid range
+                  continue;
+                }
 
-        // Extract the actual data from the HTTP request
-        auto* raw_data { reinterpret_cast<std::uint8_t*>(res->body.data()) };
-        if (metadata.doc_type == "ndarray") {
-          constants.dtype = metadata.consts_dtype;
-          constants.shape = metadata.consts_shape;
-          load_values_from_byte_stream(raw_data,
-                                       metadata.consts_dtype,
-                                       metadata.consts_nelem,
-                                       constants.data);
-          constants_map[metadata.consts_name] = constants;
-        } else if (metadata.doc_type == "str") {
-          logger->debug("[LCLS2][{}] Getting string constants", data_endpoint);
-          // ... for whatever reason, XTCAV was handled as a special JSON-string...
-          if (metadata.consts_name == "xtcav_lasingoff" ||
-              metadata.consts_name == "xtcav_pedestals" ||
-              metadata.consts_name == "lasingoffreference") {
-            // Deserialize JSON string...
-            rapidjson::Document xtcav_json;
-            /// Here's to hoping its a real null-terminated string...
-            xtcav_json.Parse(reinterpret_cast<const char*>(raw_data));
+                auto [run_begin, run_end] = *valid_run_range;
 
-            deserialize_json_dict(xtcav_json, constants_map);
+                CalibDocMetadata metadata = parse_metadata_doc(doc);
+                metadata.consts_name = doc_constants_type;
+                metadata.doc_run_begin = run_begin;
+                metadata.doc_run_end = run_end;
+                docs_for_ctype.push_back(metadata);
+
+                logger->trace("[LCLS2][{}] Possible candidate constants have ID: {}",
+                              endpoint,
+                              metadata.data_doc_id);
+              }
+            }
           } else {
-            // Its just a string... We have a char pointer already
-            constants.data.resize(metadata.consts_nelem);
-            std::memcpy(constants.data.data(), raw_data, metadata.consts_nelem);
-
-            constants_map[metadata.consts_name] = constants;
+            logger->error("[LCLS2][{}] Call to endpoint returned non-200 status {} - skipping!",
+                          endpoint,
+                          res->status);
           }
         }
+      }
 
-        logger->info("[LCLS2][{}] Retrieved constants for '{}'",
-                     endpoint,
-                     metadata.consts_name);
+      CalibDocMetadata final_metadata_doc;
+      if (!docs_for_ctype.empty()) {
+        // Sort the candidate constants documents
+        std::sort(docs_for_ctype.begin(), docs_for_ctype.end());
+
+        final_metadata_doc = docs_for_ctype.back();
+
+        logger->debug("[LCLS2][Validity] Selected best doc for constants type '{}' (begin={}, end={}, ts={})",
+                      ct,
+                      final_metadata_doc.doc_run_begin,
+                      final_metadata_doc.doc_run_end,
+                      final_metadata_doc.doc_unix_ts);
+
+        // Now get the data using data_doc_id
+        CalibrationConstants constants;
+        std::string data_endpoint { "/calib_ws/" + db_in_use + "/gridfs/" + final_metadata_doc.data_doc_id };
+        if (auto res = cli.Get(data_endpoint)) {
+          if (res->status != 200) {
+            logger->error("[LCLS2][{}] Call for data returned non-200 status {} - skipping!",
+                          data_endpoint,
+                          res->status);
+            continue;
+          }
+          // Store the metadata in the final struct in case its needed
+          constants.metadata = final_metadata_doc;
+
+          // Extract the actual data from the HTTP request
+          auto* raw_data { reinterpret_cast<std::uint8_t*>(res->body.data()) };
+          if (final_metadata_doc.doc_type == "ndarray") {
+            constants.dtype = final_metadata_doc.consts_dtype;
+            constants.shape = final_metadata_doc.consts_shape;
+            load_values_from_byte_stream(raw_data,
+                                         final_metadata_doc.consts_dtype,
+                                         final_metadata_doc.consts_nelem,
+                                         constants.data);
+            constants_map[ct] = constants;
+          } else if (final_metadata_doc.doc_type == "str") {
+            logger->debug("[LCLS2][{}] Getting string constants", data_endpoint);
+            // ... for whatever reason, XTCAV was handled as a special JSON-string...
+            if (final_metadata_doc.consts_name == "xtcav_lasingoff" ||
+                final_metadata_doc.consts_name == "xtcav_pedestals" ||
+                final_metadata_doc.consts_name == "lasingoffreference") {
+              // Deserialize JSON string...
+              rapidjson::Document xtcav_json;
+              /// Here's to hoping its a real null-terminated string...
+              xtcav_json.Parse(reinterpret_cast<const char*>(raw_data));
+
+              deserialize_json_dict(xtcav_json, constants_map);
+            } else {
+              // Its just a string... We have a char pointer already
+              constants.data.resize(final_metadata_doc.consts_nelem);
+              std::memcpy(constants.data.data(), raw_data, final_metadata_doc.consts_nelem);
+
+              constants_map[ct] = constants;
+            }
+          }
+
+          logger->info("[LCLS2][{}] Retrieved constants for '{}'", endpoint, ct);
+        }
+      } else {
+        logger->warn("[LCLS2][Validity] No valid calibration document found for ctype '{}' at run {}",
+                     ct,
+                     run);
       }
     }
 

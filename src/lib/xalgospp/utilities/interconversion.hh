@@ -22,6 +22,8 @@
 
 #include "ncarray/dtype.hh"
 
+#include <Eigen/Dense>
+
 #include <stdexcept>
 #include <string>
 
@@ -89,6 +91,20 @@ namespace xalgospp {
     }
 
     throw invalid_type_string("Unsupported type str repr: " + dtype_str + "!");
+  }
+
+  /**
+   * Convert an NCArrayView to an Eigen Map.
+   *
+   * @tparam T The underlying datatype of the array views.
+   * @param view The NCArrayView to convert.
+   * @returns An Eigen::Map over the NCArrayView's data.
+   */
+  template <typename T>
+  inline Eigen::Map<Eigen::Array<T, Eigen::Dynamic, 1>>
+  to_eigen_array(const ncarray::NCArrayView& view) {
+    return Eigen::Map<Eigen::Array<T, Eigen::Dynamic, 1>>(static_cast<T*>(view.data()),
+                                                          view.size());
   }
 } // namespace XAlgosPP
 
