@@ -313,25 +313,30 @@ namespace xalgospp::det {
       }
 
       // Currently, ony support host-only calibration routines via Eigen.
-      auto raw_map { to_eigen_array<std::uint16_t>(input) };
-      auto out_map { to_eigen_array<float>(output) };
-
       std::span<const PixelCalibStruct> consts_span(m_constants_buf.data(),
                                                     m_constants_buf.size());
-      if constexpr (std::is_same_v<Policy, RuntimeCalibPolicy>) {
-        // Construct runtime calibration parameters from configuration
-        CalibParameters cp;
-        cp.gain_shift = m_params.gain_shift;
-        cp.gain_mask = m_params.gain_mask;
-        cp.data_mask = m_params.data_mask;
-        cp.num_gains = m_params.num_gains;
-        cp.invalid_pattern = m_params.invalid_pattern;
-        cp.invalid_value = m_params.invalid_value;
-        cp.mapping = m_params.mapping;
-        out_map = calibrate(raw_map, cp, consts_span, 0);
-      } else {
-        // Use the compile-time policy calibrator
-        out_map = calibrate<Policy, decltype(raw_map), float>(raw_map, consts_span, 0);
+      ssize_t num_segments { input.shape()[0] };
+
+      // Iterate segments in case of multi-panel detectors with pointer axes
+      for (ssize_t i = 0; i < num_segments; ++i) {
+        auto raw_map { to_eigen_array<std::uint16_t>(input(i)) };
+        auto out_map { to_eigen_array<float>(output(i)) };
+
+        if constexpr (std::is_same_v<Policy, RuntimeCalibPolicy>) {
+          // Construct runtime calibration parameters from configuration
+          CalibParameters cp;
+          cp.gain_shift = m_params.gain_shift;
+          cp.gain_mask = m_params.gain_mask;
+          cp.data_mask = m_params.data_mask;
+          cp.num_gains = m_params.num_gains;
+          cp.invalid_pattern = m_params.invalid_pattern;
+          cp.invalid_value = m_params.invalid_value;
+          cp.mapping = m_params.mapping;
+          out_map = calibrate(raw_map, cp, consts_span, 0);
+        } else {
+          // Use the compile-time policy calibrator
+          out_map = calibrate<Policy, decltype(raw_map), float>(raw_map, consts_span, 0);
+        }
       }
     }
 
