@@ -225,8 +225,8 @@ deps_for_xalgospp += cpp_httplib_dep
 eigen_dep = dependency('eigen', required: false)
 if not eigen_dep.found()
     message('eigen not found - using subproject')
+    eigen_proj = subproject('eigen')
     eigen_dep = dependency('eigen3')
-    deps_for_xalgospp += eigen_dep
 endif
 deps_for_xalgospp += eigen_dep
 
@@ -396,6 +396,7 @@ if build_core_opt
         'xalgospp',
         [            
             'src/lib/xalgospp/detector/lcls2/calibdb.cc',
+            'src/lib/xalgospp/utilities/interconversion.cc',
             'src/lib/xalgospp/utilities/mongodb.cc',
         ],
         cpp_args: ['-DXALG_BUILD_XALGOSPP_API'],
@@ -412,6 +413,7 @@ if build_core_opt
         link_with: [
             libxalgospp,
         ],
+        dependencies: deps_for_xalgospp,
         include_directories: xalgospp_headers,
     )
 
