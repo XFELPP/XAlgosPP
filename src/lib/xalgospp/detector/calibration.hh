@@ -147,7 +147,7 @@ namespace xalgospp::det {
 
     const CalibParameters& p;
     // const ncarray::NCArrayView calib_const; // DType::vfloat2
-    const std::span<const PixelCalibStruct>& calib_const;
+    const std::span<const PixelCalibStruct> calib_const;
     std::size_t NPIX;
     std::size_t seg_offset;
   };
@@ -185,7 +185,7 @@ namespace xalgospp::det {
     }
 
     // const ncarray::NCArrayView calib_const; // DType::vfloat2
-    const std::span<const PixelCalibStruct>& calib_const;
+    const std::span<const PixelCalibStruct> calib_const;
     std::size_t NPIX;
     std::size_t seg_offset;
   };
@@ -330,10 +330,12 @@ namespace xalgospp::det {
           cp.invalid_pattern = m_params.invalid_pattern;
           cp.invalid_value = m_params.invalid_value;
           cp.mapping = m_params.mapping;
-          out_map = calibrate(raw_map, cp, m_constants, 0);
+          out_map = calibrate(raw_map, cp, m_constants, i * raw_map.size());
         } else {
           // Use the compile-time policy calibrator
-          out_map = calibrate<Policy, decltype(raw_map), float>(raw_map, m_constants, 0);
+          out_map = calibrate<Policy, decltype(raw_map), float>(raw_map,
+                                                                m_constants,
+                                                                i * raw_map.size());
         }
       }
     }
@@ -349,8 +351,7 @@ namespace xalgospp::det {
      *       not have been populated yet! Make sure to consider staging, and any
      *       other lifecycle considerations before using the pointer!
      *
-     * @param[in] buf A buffer containing calibration constants.
-     * @param[in] nbytes The size of the buffer in bytes.
+     * @returns A pointer to the constants buffer.
      */
     const PixelCalibStruct* get_staged_data_impl() const {
       return m_constants.data();
@@ -411,6 +412,22 @@ namespace xalgospp::det {
       if (consts_map.count("pedestals")) {
         auto& pedestals { consts_map["pedestals"] };
 
+        // We'll use some heuristics for the RuntimeCalib case if people made
+        // a mistake
+        if constexpr (std::is_same_v<Policy, RuntimeCalibPolicy>) {
+          // If the constants only have 2 dimensions (i.e. match image dims)
+          // then set the number of gains to 1
+          if (m_params.num_gains > 2 && pedestals.metadata.consts_ndim == 2) {
+            logger->debug("[Calibration] Overriding the number of gains. We think its 1.");
+            m_params.num_gains = 1;
+            // That also means there are no fancy masking things to do.
+            m_params.gain_mask = 0;
+            m_params.gain_shift = 0;
+            // And the data mask is all 16 bits
+            m_params.data_mask = 0xFFFF;
+          }
+        }
+
         // Will combine pedestals + offsets and gain into Float2 structs
         // CalibrationConstants.data is a byte buffer -> need to adjust by dtype.
         ncarray::DType peds_dtype = string_to_dtype(pedestals.dtype);
@@ -441,8 +458,10 @@ namespace xalgospp::det {
                       ncarray::op_traits<PedT>::template cast<float>(ped_ptr[i]) +
                       ncarray::op_traits<OffT>::template cast<float>(off_ptr[i]);
 
+                    // Gains stored as ADU/keV - invert so its keV/ADU and can
+                    // just multiply in hot loop
                     m_constants_buf[i].y =
-                      ncarray::op_traits<GainT>::template cast<float>(gain_ptr[i]);
+                      1.0f / ncarray::op_traits<GainT>::template cast<float>(gain_ptr[i]);
                   }
                 };
 
@@ -485,8 +504,11 @@ namespace xalgospp::det {
               for (std::size_t i = 0; i < nelem; ++i) {
                 m_constants_buf[i].x =
                   ncarray::op_traits<PedT>::template cast<float>(ped_ptr[i]);
+
+                // Gains stored as ADU/keV - invert so its keV/ADU and can
+                // just multiply in hot loop
                 m_constants_buf[i].y =
-                  ncarray::op_traits<GainT>::template cast<float>(gain_ptr[i]);
+                  1.0f / ncarray::op_traits<GainT>::template cast<float>(gain_ptr[i]);
               }
             };
 
