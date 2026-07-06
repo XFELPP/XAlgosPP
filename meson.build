@@ -498,6 +498,18 @@ if build_python_opt
         build_rpath: py_to_lib_install_rpath,
         # link_args: py_mod_link_args,
     )
+
+    py3.install_sources(
+        'src/xalgospp/__init__.py',
+        pure: false,
+        subdir: 'xalgospp',
+    )
+
+    py3.install_sources(
+        'src/xalgospp/core/__init__.py',
+        pure: false,
+        subdir: 'xalgospp/core',
+    )
 endif # build_python_opt
 
 #### Test executables ####
