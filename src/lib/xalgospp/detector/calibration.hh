@@ -293,6 +293,27 @@ namespace xalgospp::det {
 #ifndef __CUDA_ARCH__
       // NOTE: Eventually want to have other constants fetchers.
       get_lcls2_calibdb_constants();
+
+      // During the staging, we may use heuristics to override parameters to make
+      // life easier for people. If used in sbio, however, different parallel units
+      // may not see these. So, we pack both the parameters and the constants into
+      // the serialized staged data.
+      constexpr std::size_t align { alignof(PixelCalibStruct) };
+      std::size_t header_size { sizeof(CalibParameters) };
+      std::size_t constants_offset { (header_size + align - 1) & ~(align - 1) };
+      std::size_t nelem { m_constants.size() };
+      std::size_t constants_size { nelem * sizeof(PixelCalibStruct) };
+
+      const std::uint8_t* params_ptr { reinterpret_cast<const std::uint8_t*>(&m_params) };
+      // NOTE: m_constants is now invalid since we shifted its backing buffer
+      m_serialized_data.insert(m_serialized_data.begin(),
+                               params_ptr,
+                               params_ptr + sizeof(CalibParameters));
+
+      auto* new_ptr { reinterpret_cast<PixelCalibStruct*>(m_serialized_data.data() + constants_offset) };
+      m_constants = std::span<PixelCalibStruct>(new_ptr, nelem);
+
+
 #else
       printf("[XAlgosPP::Calibrator][Constants Fetch] Constants fetching only supported on host!\n");
 #endif
@@ -353,8 +374,8 @@ namespace xalgospp::det {
      *
      * @returns A pointer to the constants buffer.
      */
-    const PixelCalibStruct* get_staged_data_impl() const {
-      return m_constants.data();
+    const std::uint8_t* get_staged_data_impl() const {
+      return m_serialized_data.data();
     }
 
     /**
@@ -364,18 +385,33 @@ namespace xalgospp::det {
      * @param[in] nbytes The size of the buffer in bytes.
      */
     void set_staged_data_impl(std::uint8_t* buf, std::size_t nbytes) {
-      std::size_t nelem { nbytes / sizeof(PixelCalibStruct) };
-      m_constants = std::span<PixelCalibStruct>(reinterpret_cast<PixelCalibStruct*>(buf),
+      // During the staging, we may use heuristics to override parameters to make
+      // life easier for people. If used in sbio, however, different parallel units
+      // may not see these. So, we pack both the parameters and the constants into
+      // the serialized staged data.
+      constexpr std::size_t align { alignof(PixelCalibStruct) };
+      std::size_t header_size { sizeof(CalibParameters) };
+      std::size_t constants_offset { (header_size + align - 1) & ~(align - 1) };
+
+      // First copy any parameter updates
+      std::memcpy(&m_params, buf, sizeof(CalibParameters));
+
+      // Now build a span over the remaining data
+      std::size_t nelem { (nbytes - constants_offset) / sizeof(PixelCalibStruct) };
+      m_constants = std::span<PixelCalibStruct>(reinterpret_cast<PixelCalibStruct*>(buf + constants_offset),
                                                 nelem);
     }
 
     /**
-     * The total size in bytes of the calibration constants.
+     * The total size in bytes of the calibration constants and any serialized params.
+     *
+     * @note For facilitating the sharing of any overloads for parameters, they may
+     *       be serialized alongside the constants themselves in one buffer.
      *
      * @return The total size in bytes of the calibration constants.
      */
     std::size_t staged_data_size_impl() const {
-      return m_constants.size() * sizeof(PixelCalibStruct);
+      return m_serialized_data.size();
     }
 
   private:
@@ -433,7 +469,9 @@ namespace xalgospp::det {
         ncarray::DType peds_dtype = string_to_dtype(pedestals.dtype);
 
         std::size_t nelem { pedestals.metadata.consts_nelem };
-        m_constants_buf.resize(nelem);
+        // The buffer is a byte buffer, it will hold the constants and the calibration
+        // parameters in serialized fashion, should they need to be shared
+        m_serialized_data.resize(nelem * sizeof(PixelCalibStruct));
 
         bool have_offsets { consts_map.count("pixel_offset") ? true : false };
         bool have_gains { consts_map.count("pixel_gain") ? true : false };
@@ -453,14 +491,15 @@ namespace xalgospp::det {
                   const OffT* off_ptr { reinterpret_cast<const OffT*>(offsets.data.data()) };
                   const GainT* gain_ptr { reinterpret_cast<const GainT*>(gains.data.data()) };
 
+                  auto* consts_ptr { reinterpret_cast<PixelCalibStruct*>(m_serialized_data.data()) };
                   for (std::size_t i = 0; i < nelem; ++i) {
-                    m_constants_buf[i].x =
+                    consts_ptr[i].x =
                       ncarray::op_traits<PedT>::template cast<float>(ped_ptr[i]) +
                       ncarray::op_traits<OffT>::template cast<float>(off_ptr[i]);
 
                     // Gains stored as ADU/keV - invert so its keV/ADU and can
                     // just multiply in hot loop
-                    m_constants_buf[i].y =
+                    consts_ptr[i].y =
                       1.0f / ncarray::op_traits<GainT>::template cast<float>(gain_ptr[i]);
                   }
                 };
@@ -478,12 +517,13 @@ namespace xalgospp::det {
                 const PedT* ped_ptr { reinterpret_cast<const PedT*>(pedestals.data.data()) };
                 const OffT* off_ptr { reinterpret_cast<const OffT*>(offsets.data.data()) };
 
+                auto* consts_ptr { reinterpret_cast<PixelCalibStruct*>(m_serialized_data.data()) };
                 for (std::size_t i = 0; i < nelem; ++i) {
-                  m_constants_buf[i].x =
+                  consts_ptr[i].x =
                     ncarray::op_traits<PedT>::template cast<float>(ped_ptr[i]) +
                     ncarray::op_traits<OffT>::template cast<float>(off_ptr[i]);
 
-                  m_constants_buf[i].y = m_params.default_gain;
+                  consts_ptr[i].y = m_params.default_gain;
                 }
               };
 
@@ -501,13 +541,14 @@ namespace xalgospp::det {
               const PedT* ped_ptr { reinterpret_cast<const PedT*>(pedestals.data.data()) };
               const GainT* gain_ptr { reinterpret_cast<const GainT*>(gains.data.data()) };
 
+              auto* consts_ptr { reinterpret_cast<PixelCalibStruct*>(m_serialized_data.data()) };
               for (std::size_t i = 0; i < nelem; ++i) {
-                m_constants_buf[i].x =
+                consts_ptr[i].x =
                   ncarray::op_traits<PedT>::template cast<float>(ped_ptr[i]);
 
                 // Gains stored as ADU/keV - invert so its keV/ADU and can
                 // just multiply in hot loop
-                m_constants_buf[i].y =
+                consts_ptr[i].y =
                   1.0f / ncarray::op_traits<GainT>::template cast<float>(gain_ptr[i]);
               }
             };
@@ -521,8 +562,8 @@ namespace xalgospp::det {
         logger->info("[CalibDB] Staging complete: Loaded {} calibration elements.", nelem);
 
         // Create a span over the buffered data
-        m_constants = std::span<PixelCalibStruct>(m_constants_buf.data(),
-                                                  m_constants_buf.size());
+        auto* consts_ptr { reinterpret_cast<PixelCalibStruct*>(m_serialized_data.data()) };
+        m_constants = std::span<PixelCalibStruct>(consts_ptr, nelem);
       } else {
         logger->warn("[CalibDB] No pedestals were retrieved! Calibration will be a NoOp!");
       }
@@ -539,12 +580,14 @@ namespace xalgospp::det {
      */
     std::span<PixelCalibStruct> m_constants;
     /**
-     * The raw buffer for the calibration constants. This may be empty if this
-     * particular instance of the Algorithm does not actually own the data.
+     * A raw bytes buffer containing the calibration constants and parameters.
+     * The parameters are also serialized into the buffer to facilitate data sharing
+     * as needed. This may be empty if this particular instance of hte Algorithm does
+     * not actually own the data.
      * The span above (m_constants) is what is always used for processing, and it
      * may be constructed over a non-owned buffer, in some cases.
      */
-    std::vector<PixelCalibStruct> m_constants_buf;
+    std::vector<std::uint8_t> m_serialized_data;
   };
 } // namespace xalgospp::det
 
