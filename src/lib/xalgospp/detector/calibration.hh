@@ -308,7 +308,7 @@ namespace xalgospp::det {
      * @param[out] output The array to hold the output calibrated data.
      */
     void process_impl(const ncarray::NCArrayView& input, ncarray::NCArrayView& output) const {
-      if (m_constants_buf.empty()) {
+      if (m_constants.empty()) {
         throw std::runtime_error("[Calibration] Run-time error: Staging has not been run!");
       }
 
