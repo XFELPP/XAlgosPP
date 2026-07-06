@@ -299,7 +299,9 @@ namespace xalgospp::lcls2 {
   }
 
   std::optional<std::pair<unsigned, unsigned>>
-  is_doc_valid_for_run(const rapidjson::Value& metadata_doc, unsigned target_run) {
+  is_doc_valid_for_run(const rapidjson::Value& metadata_doc,
+                       unsigned target_run,
+                       bool is_det_db_doc) {
     auto logger = spdlog::get("XAlgosPP::LCLS2::CalibDB");
     if (!logger) {
       logger = spdlog::stdout_color_mt("XAlgosPP::LCLS2::CalibDB");
@@ -327,6 +329,7 @@ namespace xalgospp::lcls2 {
         logger->warn("[LCLS2][RunValidity] Skipping document with invalid run!");
         return std::nullopt;
       }
+
       if (run_begin > LCLS_MAX_EXP_RUN_NUM) {
         logger->debug("[LCLS2][RunValidity] Skipping doc with begin run past max: {}.",
                       run_begin);
@@ -334,7 +337,8 @@ namespace xalgospp::lcls2 {
       }
     }
 
-    if (target_run < run_begin) {
+    // For "detector" database documents, don't skip based on run value.
+    if (!is_det_db_doc && target_run < run_begin) {
       // If the run_begin starting validity is after this run, skip
       logger->trace("[LCLS2][RunValidity] Skipping doc begin run after target: {} > {}.",
                     run_begin,
@@ -361,7 +365,8 @@ namespace xalgospp::lcls2 {
       }
     }
 
-    if (run_end < target_run) {
+    // For "detector" database documents, don't skip based on run value.
+    if (!is_det_db_doc && run_end < target_run) {
       logger->trace("[LCLS2][RunValidity] Skipping doc end run before target: {} < {}.",
                     run_end,
                     target_run);
@@ -433,7 +438,7 @@ namespace xalgospp::lcls2 {
               }
 
               // Check validity
-              auto valid_run_range = is_doc_valid_for_run(doc, run);
+              auto valid_run_range = is_doc_valid_for_run(doc, run, /*is_det_db_doc=*/false);
               if (!valid_run_range.has_value()) {
                 // Not valid range
                 continue;
@@ -485,7 +490,7 @@ namespace xalgospp::lcls2 {
                 }
 
                 // Check validity
-                auto valid_run_range = is_doc_valid_for_run(doc, run);
+                auto valid_run_range = is_doc_valid_for_run(doc, run, /*is_det_db_doc=*/true);
                 if (!valid_run_range.has_value()) {
                   // Not valid range
                   continue;

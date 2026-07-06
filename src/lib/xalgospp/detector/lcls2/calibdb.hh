@@ -214,12 +214,20 @@ namespace xalgospp::lcls2 {
   /**
    * Check whether a retrieved metadata document has an appropriate validity range.
    *
+   * @note If using the "detector" database, this function only checks that the values
+   *       make sense, not the run is in a range. Invalid values (like a garbage string)
+   *       could indicate other problems with the document, but the detector database
+   *       is intended to be used across experiments, so the ranges don't apply.
+   *
    * @param[in] metadata_doc The retrieved constants metadata document.
    * @param[in] target_run The target run number for which the document should be valid.
+   * @param[in] is_det_db_doc Whether the document was a detector database document.
    * @returns Returns the begin and end run if valid (for later sorting); otherwise nullopt.
    */
   std::optional<std::pair<unsigned, unsigned>>
-  is_doc_valid_for_run(const rapidjson::Value& metadata_doc, unsigned target_run);
+  is_doc_valid_for_run(const rapidjson::Value& metadata_doc,
+                       unsigned target_run,
+                       bool is_det_db_doc);
 
   /**
    * For the provided short name get most recent valid constants for the experiment/run.
