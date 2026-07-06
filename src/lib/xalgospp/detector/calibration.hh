@@ -313,8 +313,6 @@ namespace xalgospp::det {
       }
 
       // Currently, ony support host-only calibration routines via Eigen.
-      std::span<const PixelCalibStruct> consts_span(m_constants_buf.data(),
-                                                    m_constants_buf.size());
       ssize_t num_segments { input.shape()[0] };
 
       // Iterate segments in case of multi-panel detectors with pointer axes
@@ -332,15 +330,52 @@ namespace xalgospp::det {
           cp.invalid_pattern = m_params.invalid_pattern;
           cp.invalid_value = m_params.invalid_value;
           cp.mapping = m_params.mapping;
-          out_map = calibrate(raw_map, cp, consts_span, 0);
+          out_map = calibrate(raw_map, cp, m_constants, 0);
         } else {
           // Use the compile-time policy calibrator
-          out_map = calibrate<Policy, decltype(raw_map), float>(raw_map, consts_span, 0);
+          out_map = calibrate<Policy, decltype(raw_map), float>(raw_map, m_constants, 0);
         }
       }
     }
 
     const char* name_impl() const { return "Calibration"; }
+
+    /**
+     * Retrieve a pointer to the calibration constants.
+     *
+     * @note This uses the *span* as the source of truth for constants, as different
+     *       instances of the Algorithm may or may not own the data.
+     * @note Depending on when this function is called, the constants may or may
+     *       not have been populated yet! Make sure to consider staging, and any
+     *       other lifecycle considerations before using the pointer!
+     *
+     * @param[in] buf A buffer containing calibration constants.
+     * @param[in] nbytes The size of the buffer in bytes.
+     */
+    const PixelCalibStruct* get_staged_data_impl() const {
+      return m_constants.data();
+    }
+
+    /**
+     * Provide access from a buffer from elsewhere containing the calibration constants.
+     *
+     * @param[in] buf A buffer containing calibration constants.
+     * @param[in] nbytes The size of the buffer in bytes.
+     */
+    void set_staged_data_impl(std::uint8_t* buf, std::size_t nbytes) {
+      std::size_t nelem { nbytes / sizeof(PixelCalibStruct) };
+      m_constants = std::span<PixelCalibStruct>(reinterpret_cast<PixelCalibStruct*>(buf),
+                                                nelem);
+    }
+
+    /**
+     * The total size in bytes of the calibration constants.
+     *
+     * @return The total size in bytes of the calibration constants.
+     */
+    std::size_t staged_data_size_impl() const {
+      return m_constants.size() * sizeof(PixelCalibStruct);
+    }
 
   private:
     /**
@@ -462,6 +497,10 @@ namespace xalgospp::det {
         }
 
         logger->info("[CalibDB] Staging complete: Loaded {} calibration elements.", nelem);
+
+        // Create a span over the buffered data
+        m_constants = std::span<PixelCalibStruct>(m_constants_buf.data(),
+                                                  m_constants_buf.size());
       } else {
         logger->warn("[CalibDB] No pedestals were retrieved! Calibration will be a NoOp!");
       }
@@ -472,6 +511,17 @@ namespace xalgospp::det {
 
   private:
     Params m_params;
+    /**
+     * The calibration constants used for processing. This span may be constructed
+     * over a non-owned buffer in some cases.
+     */
+    std::span<PixelCalibStruct> m_constants;
+    /**
+     * The raw buffer for the calibration constants. This may be empty if this
+     * particular instance of the Algorithm does not actually own the data.
+     * The span above (m_constants) is what is always used for processing, and it
+     * may be constructed over a non-owned buffer, in some cases.
+     */
     std::vector<PixelCalibStruct> m_constants_buf;
   };
 } // namespace xalgospp::det

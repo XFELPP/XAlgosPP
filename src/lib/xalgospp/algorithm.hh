@@ -99,6 +99,56 @@ namespace xalgospp {
       }
     }
 
+    /**
+     * For Algorithms which provide staging of associated data, retrieve what was staged.
+     *
+     * In some execution contexts, it may be desirable to control which of many parallel
+     * processing units performs staging. This function and the related setter allow
+     * for retrieving and setting staged data, allowing precise control of how and when
+     * different parallel units perform these actions.
+     *
+     * @returns Any staged data for the Algorithm. If applicable.
+     */
+    const auto get_staged_data() const {
+      if constexpr (requires { static_cast<const Derived*>(this)->get_staged_data_impl(); }) {
+        return static_cast<const Derived*>(this)->get_staged_data_impl();
+      }
+    }
+
+    /**
+     * For Algorithms which provide staging of associated data, alternatively set it.
+     *
+     * In some execution contexts, it may be desirable to control which of many parallel
+     * processing units performs staging. This function and the related getter allow
+     * for retrieving and setting staged data, allowing precise control of how and when
+     * different parallel units perform these actions.
+     *
+     * @tparam StagedData The type(s) of the staged data.
+     * @param[in] staged_data The data that was staged somehow and should be used by the
+     *            Algorithm. This is Algorithm-specific.
+     */
+    template <typename... StagedData>
+    void set_staged_data(StagedData&&... staged_data) {
+      if constexpr (requires {
+          static_cast<Derived*>(this)->set_staged_data_impl(hd_std::forward<StagedData>(staged_data)...);
+      }) {
+        static_cast<Derived*>(this)->set_staged_data_impl(hd_std::forward<StagedData>(staged_data)...);
+      }
+    }
+
+    /**
+     * For Algorithms which provide staging, retrieve the size (in bytes) of the staged data.
+     *
+     * @returns The size in bytes of any (and all) staged data. If no data is staged, then 0.
+     */
+    hd_std::size_t staged_data_size() const {
+      if constexpr (requires { static_cast<const Derived*>(this)->staged_data_size_impl(); }) {
+        return static_cast<const Derived*>(this)->staged_data_size_impl();
+      }
+
+      return 0;
+    }
+
     template <typename... Inputs, typename... Outputs>
     void process(const hd_std::tuple<Inputs...>& inputs,
                  hd_std::tuple<Outputs...>& outputs) {
