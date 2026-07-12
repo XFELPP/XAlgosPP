@@ -21,6 +21,9 @@
 #define XALGOSPP_DETECTOR_LCLS2_CALIBDB_HH
 
 #include "httplib.h"
+#ifdef ADD // cpp-httplib has this macro which conflicts the ncarray OpCode::ADD
+#undef ADD
+#endif
 #include "ncarray/ncarrays.hh"
 #include "rapidjson/document.h"
 #include "spdlog/spdlog.h"

@@ -81,7 +81,8 @@ namespace xalgospp {
      * @tparam Params The type of the Parameters to use.
      * @param[in] params The Algorithm-specific Parameters to use.
      */
-    template <typename Params> void configure(const Params& params) {
+    template <typename Params>
+    void configure(const Params& params) {
       if constexpr (requires { static_cast<Derived*>(this)->configure_impl(params); }) {
         static_cast<Derived*>(this)->configure_impl(params);
       }

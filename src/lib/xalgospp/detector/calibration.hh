@@ -25,12 +25,13 @@
 #include "xalgospp/parameters.hh"
 #include "xalgospp/utilities/interconversion.hh"
 
-#include "ncarray/custom_types.hh" // Include Float2 vectors
-#include "ncarray/dtype.hh"
-#include "ncarray/ncarrays.hh"
+#include <ncarray/custom_types.hh> // Include Float2 vectors
+#include <ncarray/dtype.hh>
+#include <ncarray/expression/stencil.hh>
+#include <ncarray/ncarrays.hh>
 
-#include "spdlog/sinks/stdout_color_sinks.h"
-#include "spdlog/spdlog.h"
+#include <spdlog/sinks/stdout_color_sinks.h>
+#include <spdlog/spdlog.h>
 #include <Eigen/Dense>
 
 #include <cstddef>
@@ -229,11 +230,11 @@ namespace xalgospp::det {
    *
    * @tparam Policy The compile-time calibration policy - or RuntimeCalibPolicy.
    */
-  template <typename Policy = RuntimeCalibPolicy>
-  class Calibration : public Algorithm<Calibration<Policy>> {
+  template <typename Policy = RuntimeCalibPolicy, typename MemTag = ncarray::HostTag>
+  class Calibration : public Algorithm<Calibration<Policy, MemTag>, MemTag> {
   public:
-    using Input = type_list<ncarray::NCArrayView>;  // Raw detector frames
-    using Output = type_list<ncarray::NCArrayView>; // Calibrated frames
+    using Input = type_list<ncarray::NCViewFor<MemTag>>;  // Raw detector frames
+    using Output = type_list<ncarray::NCViewFor<MemTag>>; // Calibrated frames
 
     struct Params : public Parameters<Params> {
       // These are LCLS2-specific metadata parameters for fetching constants.
@@ -302,21 +303,18 @@ namespace xalgospp::det {
       std::size_t header_size { sizeof(CalibParameters) };
       std::size_t constants_offset { (header_size + align - 1) & ~(align - 1) };
       std::size_t nelem { m_constants.size() };
-      std::size_t constants_size { nelem * sizeof(PixelCalibStruct) };
 
       const std::uint8_t* params_ptr { reinterpret_cast<const std::uint8_t*>(&m_params) };
       // NOTE: m_constants is now invalid since we shifted its backing buffer
       m_serialized_data.insert(m_serialized_data.begin(),
                                params_ptr,
                                params_ptr + sizeof(CalibParameters));
+      m_serialized_data.insert(m_serialized_data.begin() + sizeof(CalibParameters),
+                               constants_offset - sizeof(CalibParameters),
+                               0);
 
       auto* new_ptr { reinterpret_cast<PixelCalibStruct*>(m_serialized_data.data() + constants_offset) };
       m_constants = std::span<PixelCalibStruct>(new_ptr, nelem);
-
-
-#else
-      printf("[XAlgosPP::Calibrator][Constants Fetch] Constants fetching only supported on host!\n");
-#endif
     }
 
     /**
@@ -328,35 +326,37 @@ namespace xalgospp::det {
      * @param[in] input The uncalibrated raw data.
      * @param[out] output The array to hold the output calibrated data.
      */
-    void process_impl(const ncarray::NCArrayView& input, ncarray::NCArrayView& output) const {
-      if (m_constants.empty()) {
-        throw std::runtime_error("[Calibration] Run-time error: Staging has not been run!");
-      }
+    void process_impl(const ncarray::NCViewFor<MemTag>& input, ncarray::NCViewFor<MemTag>& output) const {
+      if constexpr (std::is_same_v<MemTag, ncarray::HostTag>) {
+        if (m_constants.empty()) {
+          throw std::runtime_error("[Calibration] Run-time error: Staging has not been run!");
+        }
 
-      // Currently, ony support host-only calibration routines via Eigen.
-      ssize_t num_segments { input.shape()[0] };
+        // Currently, ony support host-only calibration routines via Eigen.
+        ssize_t num_segments { input.shape()[0] };
 
-      // Iterate segments in case of multi-panel detectors with pointer axes
-      for (ssize_t i = 0; i < num_segments; ++i) {
-        auto raw_map { to_eigen_array<std::uint16_t>(input(i)) };
-        auto out_map { to_eigen_array<float>(output(i)) };
+        // Iterate segments in case of multi-panel detectors with pointer axes
+        for (ssize_t i = 0; i < num_segments; ++i) {
+          auto raw_map { to_eigen_array<std::uint16_t>(input(i)) };
+          auto out_map { to_eigen_array<float>(output(i)) };
 
-        if constexpr (std::is_same_v<Policy, RuntimeCalibPolicy>) {
-          // Construct runtime calibration parameters from configuration
-          CalibParameters cp;
-          cp.gain_shift = m_params.gain_shift;
-          cp.gain_mask = m_params.gain_mask;
-          cp.data_mask = m_params.data_mask;
-          cp.num_gains = m_params.num_gains;
-          cp.invalid_pattern = m_params.invalid_pattern;
-          cp.invalid_value = m_params.invalid_value;
-          cp.mapping = m_params.mapping;
-          out_map = calibrate(raw_map, cp, m_constants, i * raw_map.size());
-        } else {
-          // Use the compile-time policy calibrator
-          out_map = calibrate<Policy, decltype(raw_map), float>(raw_map,
-                                                                m_constants,
-                                                                i * raw_map.size());
+          if constexpr (std::is_same_v<Policy, RuntimeCalibPolicy>) {
+            // Construct runtime calibration parameters from configuration
+            CalibParameters cp;
+            cp.gain_shift = m_params.gain_shift;
+            cp.gain_mask = m_params.gain_mask;
+            cp.data_mask = m_params.data_mask;
+            cp.num_gains = m_params.num_gains;
+            cp.invalid_pattern = m_params.invalid_pattern;
+            cp.invalid_value = m_params.invalid_value;
+            cp.mapping = m_params.mapping;
+            out_map = calibrate(raw_map, cp, m_constants, i * raw_map.size());
+          } else {
+            // Use the compile-time policy calibrator
+            out_map = calibrate<Policy, decltype(raw_map), float>(raw_map,
+                                                                  m_constants,
+                                                                  i * raw_map.size());
+          }
         }
       }
     }
