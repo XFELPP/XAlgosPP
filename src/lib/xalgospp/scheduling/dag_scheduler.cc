@@ -93,13 +93,13 @@ namespace xalgospp::scheduling {
     // Launch worker threads
     std::size_t thread_id { 0 };
     for (const auto& [node_id, cores] : m_topology) {
-      m_logger->info("Launching worker {} on node {}.", thread_id, node_id);
       std::size_t threads_on_node { m_config.threads_per_node };
       if (threads_on_node == 0) {
         threads_on_node = cores.size();
       }
 
       for (std::size_t t = 0; t < threads_on_node; ++t) {
+        m_logger->info("Launching worker {} on node {}.", thread_id, node_id);
         m_workers.emplace_back(&DagScheduler::worker_loop, this, thread_id++, node_id);
       }
     }

@@ -381,6 +381,12 @@ installed_detector_lcls2_headers = [
     'src/lib/xalgospp/detector/lcls2/calibdb.hh',
 ]
 
+installed_scheduling_headers = [
+    'src/lib/xalgospp/scheduling/dag_scheduler.hh',
+    'src/lib/xalgospp/scheduling/queue.hh',
+    'src/lib/xalgospp/scheduling/task.hh',
+]
+
 installed_utilities_headers = [
     'src/lib/xalgospp/utilities/dispatch.hh',
     'src/lib/xalgospp/utilities/interconversion.hh',
@@ -396,6 +402,7 @@ if build_core_opt
         'xalgospp',
         [            
             'src/lib/xalgospp/detector/lcls2/calibdb.cc',
+            'src/lib/xalgospp/scheduling/dag_scheduler.cc',
             'src/lib/xalgospp/utilities/interconversion.cc',
             'src/lib/xalgospp/utilities/mongodb.cc',
         ],
@@ -431,6 +438,11 @@ if build_core_opt
         install_headers(
             installed_detector_lcls2_headers,
             install_dir: header_install_dir / 'xalgospp/detector/lcls2',
+        )
+
+        install_headers(
+            installed_scheduling_headers,
+            install_dir: header_install_dir / 'xalgospp/scheduling',
         )
 
         install_headers(
@@ -473,6 +485,16 @@ if build_python_opt
             installed_detector_lcls2_headers,
             pure: false,
             subdir: 'xalgospp/include/xalgospp/detector/lcls2',
+        )
+        py3.install_sources(
+            installed_scheduling_headers,
+            pure: false,
+            subdir: 'xalgospp/include/xalgospp/scheduling',
+        )
+        py3.install_sources(
+            installed_utilities_headers,
+            pure: false,
+            subdir: 'xalgospp/include/xalgospp/utilities',
         )
     endif # xalg_as_wheel_opt
 

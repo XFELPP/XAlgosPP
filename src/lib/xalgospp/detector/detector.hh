@@ -62,44 +62,6 @@ namespace xalgospp {
                                                      view.size());
   }
 
-  class CalibrationAlgorithm : public AlgorithmBase<CalibrationAlgorithm> {
-  public:
-    CalibrationAlgorithm(const CalibParameters& params,
-                         const ncarray::NCArrayView& constants_view)
-      : m_params(params)
-    {
-      // Map the ncarray view of constants to our internal calibration span
-      m_constants =
-        std::span<PixelCalibStruct>(static_cast<PixelCalibStruct*>(constants_view.data()),
-                                    constants_view.size());
-    }
-
-    const char* name_impl() const { return "Calibration"; }
-
-    void process_impl(const ncarray::NCArrayView& input,
-                      ncarray::NCArray& output) {
-      if (input.dtype() != ncarray::DType::uint16) {
-        throw std::runtime_error("Calibration input raw data must be uint16!");
-      }
-
-      auto raw_map = ncarray_to_eigen<std::uint16_t>(input);
-      auto out_map = ncarray_to_eigen<float>(output);
-      out_map = calibrate(raw_map, m_params, m_constants, 0);
-    }
-
-  private:
-    CalibParameters m_params;
-    std::span<PixelCalibStruct> m_constants;
-  };
-
-  class AlgorithmFactory {
-  public:
-    static std::unique_ptr<CalibrationAlgorithm>
-    create_calibration(const CalibParameters& params, const ncarray::NCArrayView& constants) {
-      return std::make_unique<CalibrationAlgorithm>(params, constants);
-    }
-  };
-
   static constexpr std::uint16_t MaxNameSize { 256 };
   static constexpr std::uint8_t MaxNDim { 10 };
   static constexpr std::uint16_t MaxDetectors { 256 };
