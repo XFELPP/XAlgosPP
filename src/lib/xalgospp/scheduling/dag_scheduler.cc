@@ -25,6 +25,7 @@
 #include <spdlog/sinks/stdout_color_sinks.h>
 #include <spdlog/spdlog.h>
 
+#include <chrono>
 #include <cstddef>
 #include <exception>
 #include <filesystem>
@@ -328,7 +329,9 @@ namespace xalgospp::scheduling {
           if (!acquired_token) {
             m_node_queues[home_node]->push(std::move(task));
 
-            std::this_thread::yield(); // Yield to avoid massive busy spin
+            // Sleep on a CV to avoid constant lock contention during high-mem throttling
+            std::unique_lock<std::mutex> lock(m_hm_mutex);
+            m_hm_cv.wait_for(lock, std::chrono::milliseconds(2));
             continue;
           }
         }

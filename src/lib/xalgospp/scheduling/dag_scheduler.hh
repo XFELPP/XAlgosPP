@@ -46,29 +46,29 @@ namespace xalgospp::scheduling {
    *
    * Schematically, the process can be viewed like:
    *
-   *                                 [ Pipeline Tasks ]
-   *                                         |
-   *                                 +-------v-------+
-   *                                 | Locality Hint |
-   *                                 +-------+-------+
-   *                                         |
-   *                   +---------------------+---------------------+
-   *                   | (Affinity: Node 0)  | (Affinity: Node 1)  | (No Affinity)
-   *                   v                     v                     v
-   *           +---------------+     +---------------+     +---------------+
-   *           |  Node 0 Queue |     |  Node 1 Queue |     |  Global Queue |
-   *           +-------+-------+     +-------+-------+     +-------+-------+
-   *                   |                     |                     |
-   *      +------------+------------+        |                     |
-   *      |                         |        |                     |
-   * +----v-----+              +----v-----+  |                     |
-   * | Worker 0 |              | Worker 1 |  |                     |
-   * | (Node 0) |              | (Node 0) |  |                     |
-   * +----------+              +----------+  |                     |
-   *      | (Steal Option 1)        |        |                     |
-   *      +-------------------------v--------+                     |
-   *      | (Steal Option 2)                                       |
-   *      +--------------------------------------------------------+
+   *                                   [ Pipeline Tasks ]
+   *                                           |
+   *                                   +-------v-------+
+   *                                   | Locality Hint |
+   *                                   +-------+-------+
+   *                                           |
+   *                     +---------------------+---------------------+
+   *                     | (Affinity: Node 0)  | (Affinity: Node 1)  | (No Affinity)
+   *                     v                     v                     v
+   *             +---------------+     +---------------+     +---------------+
+   *             |  Node 0 Queue |     |  Node 1 Queue |     |  Global Queue |
+   *             +-------+-------+     +-------+-------+     +-------+-------+
+   *                     |                     |                     |
+   *        +------------+------------+        |                     |
+   *        |                         |        |                     |
+   *   +----v-----+              +----v-----+  |                     |
+   *   | Worker 0 |              | Worker 1 |  |                     |
+   *   | (Node 0) |              | (Node 0) |  |                     |
+   *   +----------+              +----------+  |                     |
+   *        | (Steal Option 1)        |        |                     |
+   *        +-------------------------v--------+                     |
+   *        | (Steal Option 2)                                       |
+   *        +--------------------------------------------------------+
    *
    * @note To try to remain generic, the scheduler relies on locality hints that may not
    *       be fully determined at construction. This allows for Tasks to generate data
@@ -190,12 +190,16 @@ namespace xalgospp::scheduling {
     std::atomic<std::size_t> m_unfinished_tasks { 0 }; ///< Number of pending tasks
 
     // ---- Synchronization primitives for waiting on complete DAG ---- //
-    std::mutex m_wait_mutex;           ///< Mutex for waiting on all DAG work.
+    std::mutex m_wait_mutex;           ///< Mutex for waitixng on all DAG work.
     std::condition_variable m_wait_cv; ///< CV for waiting on all DAG work.
 
     // ---- Synchronization primitives for alerting individual workers ---- //
     std::mutex m_cv_mutex;             ///< Mutex for alerting a worker
     std::condition_variable m_job_cv;  ///< CV for alerting a worker
+
+    // ---- Synchronization primitives for sleeping for memory throttling ---- //
+    std::mutex m_hm_mutex;            ///< Mutex for high-memory throttling
+    std::condition_variable m_hm_cv;  ///< CV for alerting when the HM status releases (token)
 
     // Simple resource budget/token management
     std::atomic<std::size_t> m_active_high_mem_tasks { 0 };
