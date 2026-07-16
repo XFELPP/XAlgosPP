@@ -85,8 +85,20 @@ namespace xalgospp::scheduling {
                    num_numa_nodes,
                    num_numa_nodes > 1 ? "s" : "");
 
-    // Create a queue for each NUMA node
-    for (std::size_t i = 0; i < num_numa_nodes; ++i) {
+    // Create a queue for each NUMA node mapped to the physical IDs
+    // - If we're bound to a specific node, the returned topology will be potentially
+    //   smaller than the home node ID. So to provide remote queues, and make
+    //   the queues directly indexable, they are created up to the largest physical
+    //   ID.
+    std::size_t max_node_id { 0 };
+    for (const auto& [node_id, cores] : m_topology) {
+      if (static_cast<std::size_t>(node_id) > max_node_id) {
+        max_node_id = static_cast<std::size_t>(node_id);
+      }
+    }
+    std::size_t num_queues { m_topology.empty() ? 0 : (max_node_id + 1) };
+
+    for (std::size_t i = 0; i < num_queues; ++i) {
       m_logger->info("Creating queue for NUMA node {}.", i);
       m_node_queues.push_back(std::make_unique<WorkQueue>());
     }
@@ -144,6 +156,15 @@ namespace xalgospp::scheduling {
 #ifdef __linux__
     std::string base_path { "/sys/devices/system/node" };
 
+    cpu_set_t process_cpuset;
+    CPU_ZERO(&process_cpuset);
+    if (sched_getaffinity(0, sizeof(cpu_set_t), &process_cpuset) != 0) {
+      CPU_ZERO(&process_cpuset);
+      for (int i = 0; i < CPU_SETSIZE; ++i) {
+        CPU_SET(i, &process_cpuset);
+      }
+    }
+
     if (fs::exists(base_path)) {
       for (const auto& entry : fs::directory_iterator(base_path)) {
         std::string filename { entry.path().filename().string() };
@@ -162,18 +183,25 @@ namespace xalgospp::scheduling {
             while (std::getline(ss, range, ',')) {
               std::size_t dash { range.find('-') };
               if (dash == std::string::npos) {
-                cores.push_back(std::stoi(range));
+                int core_id { std::stoi(range) };
+                if (CPU_ISSET(core_id, &process_cpuset)) {
+                  cores.push_back(core_id);
+                }
               } else {
                 int start { std::stoi(range.substr(0, dash)) };
                 int end { std::stoi(range.substr(dash + 1)) };
                 for (int c = start; c <= end; ++c) {
-                  cores.push_back(c);
+                  if (CPU_ISSET(c, &process_cpuset)) {
+                    cores.push_back(c);
+                  }
                 }
               }
             }
           }
 
-          topology[node_id] = std::move(cores);
+          if (!cores.empty()) {
+            topology[node_id] = std::move(cores);
+          }
         }
       }
     }
