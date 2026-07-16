@@ -5,8 +5,10 @@
 
 #include <sbio/core/datasource.hh>
 #include <sbio/formats/xtc2/xtc2_traits.hh>
-#include <sbio/mpi/execution.hh>
-#include <sbio/posix_io.hh>
+#include <sbio/execution/mpi.hh>
+#include <sbio/execution/mpi_threaded.hh>
+#include <sbio/execution/threaded.hh>
+#include <sbio/io/posix.hh>
 #include <sbio/xtc2_broker.hh>
 
 #include <mpi.h>
@@ -98,10 +100,14 @@ int main(int argc, char* argv[]) {
     }
   }
 
-  MPI_Init(&argc, &argv);
-  //int provided;
-  //MPI_Init_thread(&argc, &argv, MPI_THREAD_MULTIPLE, &provided);
-  // Need to check if you get the thread_multiple or not.
+  //MPI_Init(&argc, &argv);
+  int provided;
+  MPI_Init_thread(&argc, &argv, MPI_THREAD_MULTIPLE, &provided);
+  if (provided < MPI_THREAD_MULTIPLE) {
+    // Need to check if you get the thread_multiple or not.
+    std::cout << "Was not able to provide full MPI thread support." << std::endl
+              << "- Support was provied at level: " << provided << std::endl;
+  }
 
 
   int rank;
@@ -109,23 +115,27 @@ int main(int argc, char* argv[]) {
   MPI_Comm_rank(MPI_COMM_WORLD, &rank);
   MPI_Comm_size(MPI_COMM_WORLD, &size);
 
-  using MPIDataSource = IDataSource<
+  using MPIDataSource = DataSource<
     SyncPOSIXIO,
-    MPIExecution,
+    //MPIExecution,
+    MPIThreadedExecution,
     XTC2Traits,
-    XTC2StreamBroker<SyncPOSIXIO, MPIExecution>
+    //XTC2StreamBroker<SyncPOSIXIO, MPIExecution>
+    XTC2StreamBroker<SyncPOSIXIO, MPIThreadedExecution>
   >;
 
-  using SerialDataSource = IDataSource<
+  using SerialDataSource = DataSource<
     SyncPOSIXIO,
-    SerialExecution,
+    //SerialExecution,
+    ThreadedExecution,
     XTC2Traits,
-    XTC2StreamBroker<SyncPOSIXIO, SerialExecution>
+    //XTC2StreamBroker<SyncPOSIXIO, SerialExecution>
+    XTC2StreamBroker<SyncPOSIXIO, ThreadedExecution>
   >;
 
   // ---- Setup configuration for the IO DataSource ---- //
-  //MPIDataSource ds;
-  SerialDataSource ds;
+  MPIDataSource ds;
+  //SerialDataSource ds;
   XTC2Traits::StreamParameters base_cfg;
   base_cfg.events_per_read = events_per_read;
   base_cfg.max_dgram_size = 0x4000000;
@@ -229,8 +239,9 @@ int main(int argc, char* argv[]) {
   params.det_serial_no = det_serial_number;
 
   auto calib_algo = std::make_shared<Calibrator>(params);
-  calib_algo->print_configuration();
-  calib_algo->stage();
+  //calib_algo->print_configuration();
+  //calib_algo->stage();
+  det.prepare_group_algorithm(*calib_algo);
 
   // ---- Prepare and launch the workflow ---- //
   ssize_t ndim { 3 };
@@ -258,7 +269,7 @@ int main(int argc, char* argv[]) {
             << max_submit_size << " events each." << std::endl;
 
   for (std::size_t i = 0; i < outer_iter; ++i) {
-    std::shared_ptr<xalgospp::scheduling::Task> previous_read_task { nullptr };
+    // std::shared_ptr<xalgospp::scheduling::Task> previous_read_task { nullptr };
 
     auto start = std::chrono::high_resolution_clock::now();
     for (std::size_t j = 0; j < max_submit_size; ++frame_count, ++j) { // Test over a subset of frames
@@ -274,13 +285,13 @@ int main(int argc, char* argv[]) {
       auto calib_task =
         std::make_shared<AlgTask>(calib_algo, read_task, output_arrays[j]);
 
-      if (previous_read_task != nullptr) {
-        // Chain the tasks to ensure sequential IO
-        // However, we want the **Calibration** to run in parallel, so the dependency
-        // is not on the calib_task
-        read_task->add_dependency(previous_read_task);
-      }
-      previous_read_task = read_task;
+      // if (previous_read_task != nullptr) {
+      //   // Chain the tasks to ensure sequential IO
+      //   // However, we want the **Calibration** to run in parallel, so the dependency
+      //   // is not on the calib_task
+      //   read_task->add_dependency(previous_read_task);
+      // }
+      // previous_read_task = read_task;
 
       calib_task->add_dependency(read_task);
 
@@ -302,5 +313,6 @@ int main(int argc, char* argv[]) {
             << " - Per event time was: " << per_evt_time_s << " seconds" << std::endl
             << " - Per event rate was: " << per_evt_rate_hz << " events/s" << std::endl;
 
+  MPI_Finalize();
   return 0;
 }

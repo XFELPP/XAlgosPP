@@ -93,6 +93,7 @@ endif
 #############################
 # Core options
 build_core_opt = get_option('build_core')
+build_mpi_opt = get_option('build_mpi')
 build_python_opt = get_option('build_python')
 xalg_cuda_archs_opt = get_option('xalg_cuda_archs')
 xalg_as_wheel_opt = get_option('xalg_as_wheel')
@@ -231,8 +232,55 @@ endif
 deps_for_xalgospp += eigen_dep
 
 ## MPI
-# mpi_dep = dependency('mpi', language: 'cpp', required: true)
-# deps_for_xalgospp += mpi_dep
+if build_mpi_opt == 'none'
+    message('Skipping MPI support.')
+else
+    try_sys = false
+    try_mpich = false
+    try_ompi = false
+    if build_mpi_opt == 'auto'
+        try_sys = true
+        try_mpich = true
+        try_ompi = true
+    endif
+    if build_mpi_opt == 'mpich'
+        try_mpich = true
+    endif
+    if build_mpi_opt == 'ompi'
+        try_ompi = true
+    endif
+
+    found_mpi = false
+    bundle_mpi = false # Only bundle if using subproject
+    if try_sys
+        mpi_dep = dependency('mpi', language: 'cpp', required: false)
+        if mpi_dep.found()
+            found_mpi = true
+        endif
+    endif
+    if not found_mpi and try_mpich
+        message('Will try building MPICH subproject.')
+        mpi_proj = subproject('mpich')
+        mpi_dep = mpi_proj.get_variable('mpich_dep')
+        bundle_mpi = true
+        found_mpi = true
+    endif
+    if not found_mpi and try_ompi
+        message('Will try building OpenMPI subproject.')
+        mpi_proj = subproject('ompi')
+        mpi_dep = mpi_proj.get_variable('ompi_dep')
+        bundle_mpi = true
+        found_mpi = true
+    endif
+
+    if not found_mpi
+        warning('MPI was requested, but was not built!')
+    else
+        add_project_arguments('-DSBIO_HAS_MPI', language: ['cpp', 'cuda'])
+        add_project_arguments('-DXALG_HAS_MPI', language: ['cpp', 'cuda'])
+        deps_for_xalgospp += mpi_dep
+    endif
+endif # MPI builds
 
 ## ncarray
 libncarray = cpp.find_library('ncarray', required: false)
@@ -299,11 +347,13 @@ if libsbio.found()
     # Check which components may have been built
     libxtc1slim = cpp.find_library('xtc1slim', required: false)
     if libxtc1slim.found()
+        add_project_arguments('-DSBIO_HAS_XTC1', language: ['cpp', 'cuda'])
         sbio_libs += libxtc1slim
     endif
 
     libxtc2slim = cpp.find_library('xtc2slim', required: false)
     if libxtc2slim.found()
+        add_project_arguments('-DSBIO_HAS_XTC2', language: ['cpp', 'cuda'])
         sbio_libs += libxtc2slim
     endif
 
@@ -324,22 +374,36 @@ else
         py3, '-c', py_glob_cmd,
         check: false,
     ).stdout().strip().split('\n')
-    # sbio_libs_raw = run_command(
-    #     py3, '-c',
-    #     'import glob, sbio; print("\\n".join(set(glob.glob(f"{sbio.get_lib_dir()}/lib*sbio*"))|set(glob.glob(f"{sbio.get_lib_dir()}/lib*xtc*"))))',
-    #     check: false,
-    # ).stdout().strip().split('\n')
 
     if (sbio_libs_raw.length() == 0) or (sbio_libs_raw.length() == 1  and sbio_libs_raw[0] == '')
         message('sbio not found via Python - will use subproject.')
         sbio_proj = subproject('sbio')
         sbio_dep = sbio_proj.get_variable('sbio_dep')
+        sbio_fmts = sbio_proj.get_variable('sbio_enabled_formats')['formats']
+        if 'xtc1' in sbio_fmts
+            message('Enabling XTC1 support as it was built by sbio')
+            add_project_arguments('-DSBIO_HAS_XTC1', language: ['cpp', 'cuda'])
+        endif
+        if 'xtc2' in sbio_fmts
+            message('Enabling XTC2 support as it was built by sbio')
+            add_project_arguments('-DSBIO_HAS_XTC2', language: ['cpp', 'cuda'])
+        endif
     else
         fs = import('fs')
         sbio_link_args = []
         foreach lib : sbio_libs_raw
             libdir = fs.parent(lib)
             libname = fs.name(lib)
+
+            # Enable the correct macros as needed
+            if libname.contains('xtc1')
+                add_project_arguments('-DSBIO_HAS_XTC1', language: ['cpp', 'cuda'])
+            endif
+
+            if libname.contains('xtc2')
+                add_project_arguments('-DSBIO_HAS_XTC2', language: ['cpp', 'cuda'])
+            endif
+
             sbio_link_args += [
                 '-L' + libdir,
                 '-l:' + libname,
@@ -444,7 +508,7 @@ xalgospp_headers = include_directories('src/lib', 'src/lib/xalgospp')
 subdir('src')
 
 # Build example programs
-# subdir('examples')
+subdir('examples')
 
 # Build the test suite
 # subdir('tests')

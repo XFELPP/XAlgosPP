@@ -157,12 +157,12 @@ print_banner "${LINES[@]}"
 if [ ! -d "${BUILD_DIR}" ]; then
     LINES=("Running meson setup for build configuration")
     print_banner "${LINES[@]}"
-    meson setup "${BUILD_DIR}" --prefix="${INSTALL_DIR}" -Dbuildtype=release
+    meson setup "${BUILD_DIR}" --prefix="${INSTALL_DIR}" -Dbuildtype=release -Dbuild_examples=true
 elif [[ ${FIRST_BUILD} || ${NEED_RECONFIG} ]]; then
     LINES=("Running meson setup reconfiguration")
     print_banner "${LINES[@]}"
     # Reconfigure in case prefix or options changed, but keep cache
-    meson setup "${BUILD_DIR}" --reconfigure --prefix="${INSTALL_DIR}"
+    meson setup "${BUILD_DIR}" --reconfigure --prefix="${INSTALL_DIR}" -Dbuild_examples=true
 else
     LINES=(
         "!!!!! Skipping meson setup reconfiguration !!!!!"

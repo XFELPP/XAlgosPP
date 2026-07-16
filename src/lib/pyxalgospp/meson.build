@@ -7,7 +7,7 @@ if build_python_opt
     py_mod = py3.extension_module(
         '_pyxalgospp',
         [
-            'src/lib/pyxalgospp/pyxalgospp.cc',
+            'pyxalgospp.cc',
         ],
         install: true,
         install_dir: pyxalgospp_install_dir,
