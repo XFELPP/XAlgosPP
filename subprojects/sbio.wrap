@@ -1,0 +1,8 @@
+[wrap-git]
+url = https://github.com/XFELPP/sbio.git
+# revision = main
+revision = ENH/staging
+depth = 1
+
+[provide]
+sbio = sbio_dep

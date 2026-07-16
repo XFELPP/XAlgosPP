@@ -290,6 +290,75 @@ if not rapidjson_dep.found()
 endif
 deps_for_xalgospp += rapidjson_dep
 
+
+## sbio
+libsbio = cpp.find_library('sbio', required: false)
+if libsbio.found()
+    sbio_libs = [libsbio]
+
+    # Check which components may have been built
+    libxtc1slim = cpp.find_library('xtc1slim', required: false)
+    if libxtc1slim.found()
+        sbio_libs += libxtc1slim
+    endif
+
+    libxtc2slim = cpp.find_library('xtc2slim', required: false)
+    if libxtc2slim.found()
+        sbio_libs += libxtc2slim
+    endif
+
+    sbio_dep = declare_dependency(
+        dependencies: sbio_deps,
+    )
+else
+    message('sbio not found via `find_library` - checking via Python')
+
+    # Construct an OR to look for optional components set(*sbio*) | set(*xtc*)
+    py_cmd_import_stmt = 'import glob, sbio; ' # Note the space at end
+    py_cmd_glob_sbio_stmt = 'set(glob.glob(f"{sbio.get_lib_dir()}/lib*sbio*"))'
+    py_cmd_glob_xtcs_stmt = 'set(glob.glob(f"{sbio.get_lib_dir()}/lib*xtc*"))'
+    py_sbio_libs_globs = py_cmd_glob_sbio_stmt + ' | ' + py_cmd_glob_xtcs_stmt
+    py_glob_cmd = py_cmd_import_stmt + 'print("\\n".join(' + py_sbio_libs_globs + '))'
+
+    sbio_libs_raw = run_command(
+        py3, '-c', py_glob_cmd,
+        check: false,
+    ).stdout().strip().split('\n')
+    # sbio_libs_raw = run_command(
+    #     py3, '-c',
+    #     'import glob, sbio; print("\\n".join(set(glob.glob(f"{sbio.get_lib_dir()}/lib*sbio*"))|set(glob.glob(f"{sbio.get_lib_dir()}/lib*xtc*"))))',
+    #     check: false,
+    # ).stdout().strip().split('\n')
+
+    if (sbio_libs_raw.length() == 0) or (sbio_libs_raw.length() == 1  and sbio_libs_raw[0] == '')
+        message('sbio not found via Python - will use subproject.')
+        sbio_proj = subproject('sbio')
+        sbio_dep = sbio_proj.get_variable('sbio_dep')
+    else
+        fs = import('fs')
+        sbio_link_args = []
+        foreach lib : sbio_libs_raw
+            libdir = fs.parent(lib)
+            libname = fs.name(lib)
+            sbio_link_args += [
+                '-L' + libdir,
+                '-l:' + libname,
+            ]
+        endforeach
+
+        sbio_inc = run_command(
+            py3, '-c', 'import sbio; print(sbio.get_include())',
+            check: false,
+        ).stdout().strip()
+
+        sbio_dep = declare_dependency(
+            link_args: sbio_link_args,
+            include_directories: include_directories(sbio_inc),
+        )
+    endif # if sbio_libs_raw empty (Python search for sbio)
+endif
+deps_for_xalgospp += sbio_dep
+
 spdlog_dep = dependency('spdlog', required: false)
 if not spdlog_dep.found()
     message('spdlog not found - using subproject')
@@ -368,172 +437,14 @@ endif
 #### XAlgosPP ####
 ##################
 
-installed_headers = [
-    'src/lib/xalgospp/algorithm.hh',
-]
-
-installed_detector_headers = [
-    'src/lib/xalgospp/detector/calibration.hh',
-    'src/lib/xalgospp/detector/detector.hh',
-]
-
-installed_detector_lcls2_headers = [
-    'src/lib/xalgospp/detector/lcls2/calibdb.hh',
-]
-
-installed_scheduling_headers = [
-    'src/lib/xalgospp/scheduling/dag_scheduler.hh',
-    'src/lib/xalgospp/scheduling/queue.hh',
-    'src/lib/xalgospp/scheduling/task.hh',
-]
-
-installed_utilities_headers = [
-    'src/lib/xalgospp/utilities/dispatch.hh',
-    'src/lib/xalgospp/utilities/interconversion.hh',
-    'src/lib/xalgospp/utilities/mongodb.hh',
-]
-
-#### Core Library ####
-######################
 xalgospp_headers = include_directories('src/lib', 'src/lib/xalgospp')
 
-if build_core_opt
-    libxalgospp = shared_library(
-        'xalgospp',
-        [            
-            'src/lib/xalgospp/detector/lcls2/calibdb.cc',
-            'src/lib/xalgospp/scheduling/dag_scheduler.cc',
-            'src/lib/xalgospp/utilities/interconversion.cc',
-            'src/lib/xalgospp/utilities/mongodb.cc',
-        ],
-        cpp_args: ['-DXALG_BUILD_XALGOSPP_API'],
-        dependencies: deps_for_xalgospp,
-        include_directories: xalgospp_headers,
-        install: true,
-        install_dir: libxalgospp_install_dir,
-        install_rpath: lib_install_rpath,
-        version: '1',
-        soversion: '1',
-    )
+# Traverse the main source first so the dependency objects are available
+# for examples and tests
+subdir('src')
 
-    xalgospp_dep = declare_dependency(
-        link_with: [
-            libxalgospp,
-        ],
-        dependencies: deps_for_xalgospp,
-        include_directories: xalgospp_headers,
-    )
+# Build example programs
+# subdir('examples')
 
-    if not xalg_as_wheel_opt
-        install_headers(
-            installed_headers,
-            install_dir: header_install_dir / 'xalgospp',
-        )
-
-        install_headers(
-            installed_detector_headers,
-            install_dir: header_install_dir / 'xalgospp/detector',
-        )
-
-        install_headers(
-            installed_detector_lcls2_headers,
-            install_dir: header_install_dir / 'xalgospp/detector/lcls2',
-        )
-
-        install_headers(
-            installed_scheduling_headers,
-            install_dir: header_install_dir / 'xalgospp/scheduling',
-        )
-
-        install_headers(
-            installed_utilities_headers,
-            install_dir: header_install_dir / 'xalgospp/utilities',
-        )
-    endif # not nca_as_wheel_opt
-else
-    libxalgospp = cpp.find_library('xalgospp', required: true)
-    xalgospp_dep = declare_dependency(
-        dependencies: deps_for_xalgospp + [
-            libxalgospp,
-        ],
-        include_directories: xalgospp_headers,
-    )
-endif # end build_core_opt
-
-
-#### Python Bindings ####
-#########################
-if build_python_opt
-    # Figure out dependencies
-    deps_for_py_mod = deps_for_xalgospp + [ncarray_dep, pybind11_dep, py3_dep, xalgospp_dep]
-
-    # If building bindings as a wheel, install the headers into the package itself
-    # If not building as a wheel, then these should be installed in prefix/include when
-    # building the core libraries
-    if xalg_as_wheel_opt
-        py3.install_sources(
-            installed_headers,
-            pure: false,
-            subdir: 'xalgospp/include/xalgospp',
-        )
-        py3.install_sources(
-            installed_detector_headers,
-            pure: false,
-            subdir: 'xalgospp/include/xalgospp/detector',
-        )
-        py3.install_sources(
-            installed_detector_lcls2_headers,
-            pure: false,
-            subdir: 'xalgospp/include/xalgospp/detector/lcls2',
-        )
-        py3.install_sources(
-            installed_scheduling_headers,
-            pure: false,
-            subdir: 'xalgospp/include/xalgospp/scheduling',
-        )
-        py3.install_sources(
-            installed_utilities_headers,
-            pure: false,
-            subdir: 'xalgospp/include/xalgospp/utilities',
-        )
-    endif # xalg_as_wheel_opt
-
-    # py_bindings_headers = []
-    # if xalg_as_wheel_opt
-    #     py3.install_sources(
-    #         py_bindings_headers,
-    #         pure: false,
-    #         subdir: 'xalgospp/include/pyxalgospp',
-    #     )
-    # endif
-
-    py_mod = py3.extension_module(
-        '_pyxalgospp',
-        [
-            'src/lib/pyxalgospp/pyxalgospp.cc',
-        ],
-        install: true,
-        install_dir: pyxalgospp_install_dir,
-        include_directories: xalgospp_headers,
-        dependencies : deps_for_py_mod,
-        install_rpath: py_to_lib_install_rpath,
-        build_rpath: py_to_lib_install_rpath,
-        # link_args: py_mod_link_args,
-    )
-
-    py3.install_sources(
-        'src/xalgospp/__init__.py',
-        pure: false,
-        subdir: 'xalgospp',
-    )
-
-    py3.install_sources(
-        'src/xalgospp/core/__init__.py',
-        pure: false,
-        subdir: 'xalgospp/core',
-    )
-endif # build_python_opt
-
-#### Test executables ####
-##########################
+# Build the test suite
 # subdir('tests')
