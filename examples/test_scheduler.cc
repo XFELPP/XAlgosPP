@@ -215,8 +215,6 @@ int main(int argc, char* argv[]) {
     /* max_concurrent_high_mem = */ max_concurrent_hm
   };
 
-  xalgospp::scheduling::DagScheduler scheduler(scheduler_cfg);
-
   auto fetcher = [&det](typename XTC2Traits::StepIdxType idx) {
     return det.get_data(idx, "raw", "raw");
   };
@@ -243,76 +241,52 @@ int main(int argc, char* argv[]) {
   //calib_algo->stage();
   det.prepare_group_algorithm(*calib_algo);
 
-  // ---- Prepare and launch the workflow ---- //
-  ssize_t ndim { 3 };
-  ssize_t shape[3] { 32, 512, 1024 };
+  {
+    // ---- Prepare and launch the workflow ---- //
+    xalgospp::scheduling::DagScheduler scheduler(scheduler_cfg);
 
-  constexpr std::size_t max_submit_size { 100 };
-  std::vector<std::shared_ptr<ncarray::NCArray>> output_arrays;
-  for (std::size_t j = 0; j < max_submit_size; ++j) {
-    output_arrays.push_back(std::make_shared<ncarray::NCArray>(ndim,
-                                                               shape,
-                                                               ncarray::DType::float32));
-  }
+    ssize_t ndim { 3 };
+    ssize_t shape[3] { 32, 512, 1024 };
 
-  std::size_t frame_count { 0 };
-  double total_time_s { 0 };
+    std::size_t frame_count { 0 };
 
-  std::size_t outer_iter { 0 };
-  if (n_iter > max_submit_size) {
-    outer_iter = n_iter / max_submit_size;
-  } else {
-    outer_iter = 1;
-  }
-
-  std::cout << "Will submit " << outer_iter << " DAGs, processing "
-            << max_submit_size << " events each." << std::endl;
-
-  for (std::size_t i = 0; i < outer_iter; ++i) {
-    // std::shared_ptr<xalgospp::scheduling::Task> previous_read_task { nullptr };
-
-    auto start = std::chrono::high_resolution_clock::now();
-    for (std::size_t j = 0; j < max_submit_size; ++frame_count, ++j) { // Test over a subset of frames
-      // auto output_array = std::make_shared<ncarray::NCArray>();
-
-      auto read_task = xalgospp::scheduling::make_read_image_task(ds, fetcher);
-
+    auto builder = [&](typename XTC2Traits::StepIdxType idx) {
+      auto read_task { xalgospp::scheduling::make_read_image_task(ds, fetcher, idx) };
       using AlgTask = xalgospp::scheduling::AlgorithmTask<
         Calibrator,
         typename decltype(read_task)::element_type
       >;
 
-      auto calib_task =
-        std::make_shared<AlgTask>(calib_algo, read_task, output_arrays[j]);
-
-      // if (previous_read_task != nullptr) {
-      //   // Chain the tasks to ensure sequential IO
-      //   // However, we want the **Calibration** to run in parallel, so the dependency
-      //   // is not on the calib_task
-      //   read_task->add_dependency(previous_read_task);
-      // }
-      // previous_read_task = read_task;
+      auto calib_task = std::make_shared<AlgTask>(scheduler, calib_algo, read_task);
 
       calib_task->add_dependency(read_task);
 
-      scheduler.submit_dag( { read_task, calib_task } );
-    }
+      return std::vector<std::shared_ptr<xalgospp::scheduling::Task>>{read_task, calib_task};
+    };
+
+    auto start = std::chrono::high_resolution_clock::now();
+    auto init_gen =
+      std::make_shared<xalgospp::scheduling::IOGeneratorTask<decltype(ds)>>(scheduler,
+                                                                            ds,
+                                                                            builder);
+    scheduler.submit_dag({ init_gen });
 
     scheduler.wait_all();
-
     auto end = std::chrono::high_resolution_clock::now();
+
     std::chrono::duration<double> diff { end - start };
-    total_time_s += diff.count();
+    double total_time_s { diff.count() };
+
+    double per_evt_time_s {total_time_s / n_iter };
+    double per_evt_rate_hz {1 / per_evt_time_s} ;
+
+    std::cout << "Successfully processed " << frame_count << " frames with DagScheduler." << std::endl
+              << " - Processing took: " << total_time_s << " seconds." << std::endl
+              << " - Per event time was: " << per_evt_time_s << " seconds" << std::endl
+              << " - Per event rate was: " << per_evt_rate_hz << " events/s" << std::endl;
   }
 
-  double per_evt_time_s { total_time_s / (outer_iter * max_submit_size) };
-  double per_evt_rate_hz { 1 / per_evt_time_s };
-
-  std::cout << "Successfully processed " << frame_count << " frames with DagScheduler." << std::endl
-            << " - Processing took: " << total_time_s << " seconds." << std::endl
-            << " - Per event time was: " << per_evt_time_s << " seconds" << std::endl
-            << " - Per event rate was: " << per_evt_rate_hz << " events/s" << std::endl;
-
   MPI_Finalize();
+
   return 0;
 }

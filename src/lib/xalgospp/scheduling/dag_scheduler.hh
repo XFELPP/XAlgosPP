@@ -20,10 +20,18 @@
 #ifndef XALGOSPP_SCHEDULING_DAG_SCHEDULER_HH
 #define XALGOSPP_SCHEDULING_DAG_SCHEDULER_HH
 
+#include "xalgospp/scheduling/pool.hh"
 #include "xalgospp/scheduling/queue.hh"
 #include "xalgospp/scheduling/task.hh"
 
 #include <spdlog/sinks/stdout_color_sinks.h>
+
+#ifdef _WIN32
+#include <BaseTsd.h>
+typedef SSIZE_T ssize_t;
+#else
+#include <sys/types.h>
+#endif
 
 #include <atomic>
 #include <condition_variable>
@@ -34,6 +42,10 @@
 #include <vector>
 
 namespace xalgospp::scheduling {
+  using ShapeKey = std::vector<ssize_t>;
+
+  using PoolKey = std::tuple<numa_node_t, ShapeKey, ncarray::DType>;
+
   /**
    * The primary scheduler of processing work defined by a DAG.
    *
@@ -124,6 +136,11 @@ namespace xalgospp::scheduling {
      */
     void wait_all();
 
+    std::shared_ptr<ncarray::NCArray> acquire_buffer(numa_node_t node,
+                                                     ssize_t ndim,
+                                                     const ssize_t* shape,
+                                                     ncarray::DType dtype);
+
   private:
     /**
      * Enter the main work queue.
@@ -205,6 +222,10 @@ namespace xalgospp::scheduling {
     std::atomic<std::size_t> m_active_high_mem_tasks { 0 };
 
     void on_task_complete(std::shared_ptr<Task> completed_task);
+
+    // ---- Synchronization primitives and memory for shared buffer pools ---- //
+    std::mutex m_pool_mutex;
+    std::map<PoolKey, std::shared_ptr<ArrayBufferPool>> m_pools;
 
     std::shared_ptr<spdlog::logger> m_logger;
   };

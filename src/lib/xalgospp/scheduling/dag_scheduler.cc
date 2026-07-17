@@ -22,6 +22,7 @@
 #include "xalgospp/scheduling/queue.hh"
 #include "xalgospp/scheduling/task.hh"
 
+#include <spdlog/cfg/env.h>
 #include <spdlog/sinks/stdout_color_sinks.h>
 #include <spdlog/spdlog.h>
 
@@ -74,6 +75,7 @@ namespace xalgospp::scheduling {
   DagScheduler::DagScheduler(DagScheduler::Config cfg)
     : m_config(cfg)
   {
+    spdlog::cfg::load_env_levels("XALGOSPP_DAG_LOG_LEVEL");
     auto logger = spdlog::get("XAlgosPP::Scheduling::DagScheduler");
     if (!logger) {
       m_logger = spdlog::stdout_color_mt("XAlgosPP::Scheduling::DagScheduler");
@@ -124,6 +126,11 @@ namespace xalgospp::scheduling {
     {
       std::lock_guard<std::mutex> lock(m_cv_mutex);
       m_job_cv.notify_all();
+    }
+
+    {
+      std::lock_guard<std::mutex> lock(m_hm_mutex);
+      m_hm_cv.notify_all();
     }
 
     for (auto& worker : m_workers) {
@@ -263,17 +270,18 @@ namespace xalgospp::scheduling {
   void DagScheduler::enqueue(std::shared_ptr<Task> task) {
     numa_node_t target_node { resolve_locality(task->locality()) };
 
-    if (target_node == ANY_NODE) {
-      // Global work queue contains work that is not specified for a specific place
-      m_global_queue.push(std::move(task));
-    } else {
-      m_node_queues[target_node]->push(std::move(task));
-    }
-
     {
+      std::lock_guard<std::mutex> lock(m_cv_mutex);
+
+      if (target_node == ANY_NODE) {
+        // Global work queue contains work that is not specified for a specific place
+        m_global_queue.push(std::move(task));
+      } else {
+        m_node_queues[target_node]->push(std::move(task));
+      }
+
       // Wake up the workers to run the newly enqueued task. Notify all, first come
       // first serve
-      std::lock_guard<std::mutex> lock(m_cv_mutex);
       m_job_cv.notify_all();
     }
   }
@@ -296,6 +304,10 @@ namespace xalgospp::scheduling {
       }
     }
 
+    // Need to clear this to avoid some cycles which caused memory leaks
+    // The child is queued up, so the parent can drop the reference now
+    completed_task->m_children.clear();
+
     if (m_unfinished_tasks.fetch_sub(1, std::memory_order_acq_rel) == 1) {
       std::lock_guard<std::mutex> lock(m_wait_mutex);
       m_wait_cv.notify_all();
@@ -303,6 +315,8 @@ namespace xalgospp::scheduling {
   }
 
   void DagScheduler::worker_loop(std::size_t thread_id, numa_node_t home_node) {
+    g_current_numa_node = home_node; // Set the thread's current NUMA Node globally
+
     if (m_config.enable_pinning) {
       auto it { m_topology.find(home_node) };
 
@@ -330,9 +344,15 @@ namespace xalgospp::scheduling {
 
       if (!task) {
         for (std::size_t i = 1; i < num_numa_nodes; ++i) {
-          numa_node_t remote_node = (home_node + i) % num_numa_nodes;
+          numa_node_t remote_node { (home_node + i) % num_numa_nodes };
           task = m_node_queues[remote_node]->steal();
-          if (task) break;
+
+          // m_logger->trace("Worker from Node {} stealing work from {}.",
+          //                 home_node,
+          //                 remote_node);
+          if (task) {
+            break;
+          }
         }
       }
 
@@ -357,15 +377,22 @@ namespace xalgospp::scheduling {
           if (!acquired_token) {
             m_node_queues[home_node]->push(std::move(task));
 
+            // m_logger->trace("Worker {} sleeping on HM cv.", home_node);
+            auto wait_hm_concurrent = [this]() {
+              return
+                !m_running ||
+                m_active_high_mem_tasks.load(std::memory_order_acquire) < m_config.max_concurrent_high_mem;
+            };
             // Sleep on a CV to avoid constant lock contention during high-mem throttling
             std::unique_lock<std::mutex> lock(m_hm_mutex);
-            m_hm_cv.wait_for(lock, std::chrono::milliseconds(2));
+            m_hm_cv.wait(lock, wait_hm_concurrent);
             continue;
           }
         }
 
         // Execute task
         try {
+          // m_logger->trace("Worker {} executing task.", home_node);
           task->execute();
         } catch (const std::exception& e) {
           m_logger->error("[Worker Thread {}] Task failed with exception: {}",
@@ -378,6 +405,10 @@ namespace xalgospp::scheduling {
 
         if (acquired_token) {
           m_active_high_mem_tasks.fetch_sub(1, std::memory_order_release);
+          {
+            std::lock_guard<std::mutex> lock(m_hm_mutex);
+            m_hm_cv.notify_all();
+          }
         }
 
         on_task_complete(std::move(task));
@@ -385,11 +416,44 @@ namespace xalgospp::scheduling {
         std::unique_lock<std::mutex> lock(m_cv_mutex);
 
         auto wait_for_work = [this]() {
-          return !m_running;
+          if (!m_running) {
+            return true;
+          }
+          if (!m_global_queue.empty()) {
+            return true;
+          }
+          for (auto& q : m_node_queues) {
+            if (!q->empty()) {
+              return true;
+            }
+          }
+          return false;
         };
 
-        m_job_cv.wait_for(lock, std::chrono::milliseconds(5), wait_for_work);
+        m_job_cv.wait(lock, wait_for_work);
       }
     }
+  }
+
+  std::shared_ptr<ncarray::NCArray> DagScheduler::acquire_buffer(numa_node_t node,
+                                                                 ssize_t ndim,
+                                                                 const ssize_t* shape,
+                                                                 ncarray::DType dtype) {
+    ShapeKey skey(shape, shape + ndim);
+    PoolKey pool_key { node, skey, dtype };
+    std::shared_ptr<ArrayBufferPool> pool;
+
+    {
+      std::lock_guard<std::mutex> lock(m_pool_mutex);
+      auto it { m_pools.find(pool_key) };
+      if (it == m_pools.end()) {
+        pool = std::make_shared<ArrayBufferPool>(ndim, shape, dtype);
+        m_pools[pool_key] = pool;
+      } else {
+        pool = it->second;
+      }
+    }
+
+    return pool->acquire();
   }
 } // namespace xalgospp::scheduling
