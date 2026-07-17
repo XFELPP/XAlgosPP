@@ -35,12 +35,12 @@ namespace xalgospp::scheduling {
   template <class Algo, class ParentTask, class MemTag = ncarray::HostTag>
   class AlgorithmTask : public Task {
   public:
-    AlgorithmTask(std::shared_ptr<Algo> algo,
-                  std::shared_ptr<ParentTask> parent,
-                  std::shared_ptr<ncarray::NCOwnerFor<MemTag>> output)
-      : m_algo(algo)
+    AlgorithmTask(DagScheduler& scheduler,
+                  std::shared_ptr<Algo> algo,
+                  std::shared_ptr<ParentTask> parent)
+      : m_scheduler(scheduler)
+      , m_algo(algo)
       , m_parent(parent)
-      , m_output(output)
     {
       // Try to resolve the locality based on the input buffer pointer
       LocalityHint hint {
@@ -59,23 +59,23 @@ namespace xalgospp::scheduling {
     }
 
     void execute() override {
-      // TODO: Fix the base Algorithm param resolution -- having to do these sorts
-      // of tedious extractions because of the tuple overload is annoying.
-      ncarray::NCViewFor<MemTag> input { m_parent->get_output_view() };
+      auto input = m_parent->get_output_view();
 
-      if (m_output->size() == 0) {
-        // TODO: Make this better! We dont know what the output is supposed to be
-        //       It should come from the wrapped algorithm somehow.
-        *m_output = ncarray::NCOwnerFor<MemTag>(input.ndim(),
-                                                input.shape(),
-                                                ncarray::DType::float32);
-      }
+      numa_node_t current_node { get_current_thread_numa_node() };
+
+      m_output = m_scheduler.acquire_buffer(current_node,
+                                            input.ndim(),
+                                            input.shape(),
+                                            ncarray::DType::float32);
 
       ncarray::NCViewFor<MemTag> out_view = m_output->view();
       m_algo->process(input, out_view);
     }
 
+    ncarray::NCViewFor<MemTag> get_output_view() const { return m_output->view(); }
+
   private:
+    DagScheduler& m_scheduler;
     std::shared_ptr<Algo> m_algo;
     std::shared_ptr<ParentTask> m_parent;
     std::shared_ptr<ncarray::NCOwnerFor<MemTag>> m_output;

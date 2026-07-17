@@ -30,6 +30,9 @@ namespace xalgospp::scheduling {
   using numa_node_t = int;
   constexpr numa_node_t ANY_NODE { -1 };
 
+  inline thread_local numa_node_t g_current_numa_node { ANY_NODE };
+  inline numa_node_t get_current_thread_numa_node() { return g_current_numa_node; }
+
   /**
    * A representation of resource availability and concurrency tokens for task throttling.
    */

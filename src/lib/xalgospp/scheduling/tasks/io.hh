@@ -36,10 +36,14 @@ namespace xalgospp::scheduling {
   template <class DataSource, class DataFetcher, class MemTag = ncarray::HostTag>
   class ReadImageTask : public Task {
   public:
+    using StepIdxType = typename DataSource::DSTraits::StepIdxType;
+
     ReadImageTask(DataSource& ds,
-                  DataFetcher& fetcher)
+                  DataFetcher& fetcher,
+                  StepIdxType idx)
       : m_ds(ds)
       , m_fetcher(std::move(fetcher))
+      , m_idx(idx)
     {
       // For IO, we want to schedule the Task to run on any CPU.
       // Once the data has been fetched, then down-stream Tasks must use the
@@ -65,9 +69,7 @@ namespace xalgospp::scheduling {
     ncarray::NCViewFor<MemTag> get_output_view() const { return m_output_view; }
 
     void execute() override {
-      auto idx { m_ds.next() };
-
-      m_output_view = m_fetcher(idx);
+      m_output_view = m_fetcher(m_idx);
 
       m_output_ptr = m_output_view.data();
     }
@@ -75,17 +77,21 @@ namespace xalgospp::scheduling {
   private:
     DataSource& m_ds;
     DataFetcher m_fetcher;
+    StepIdxType m_idx;
     ncarray::NCViewFor<MemTag> m_output_view;
     const void* m_output_ptr { nullptr };
   };
 
   template <class DataSource, class DataFetcher, class MemTag = ncarray::HostTag>
-  auto make_read_image_task(DataSource& ds, DataFetcher&& fetcher) {
+  auto make_read_image_task(DataSource& ds,
+                            DataFetcher&& fetcher,
+                            typename DataSource::DSTraits::StepIdxType idx) {
     using FetcherT = std::decay_t<DataFetcher>;
 
     return
       std::make_shared<ReadImageTask<DataSource, FetcherT, MemTag>>(ds,
-                                                                    std::forward<DataFetcher>(fetcher));
+                                                                    std::forward<DataFetcher>(fetcher),
+                                                                    idx);
   }
 
   template <typename ViewType>
@@ -108,6 +114,62 @@ namespace xalgospp::scheduling {
     ViewType m_view;
     mutable const void* m_ptr { nullptr };
   };
+
+  template <class DataSource>
+  class IOGeneratorTask : public Task {
+  public:
+    using DSTraits = typename DataSource::DSTraits;
+    using StepIdxType = typename DSTraits::StepIdxType;
+
+    template <typename TaskBuilder>
+    IOGeneratorTask(DagScheduler& scheduler,
+                    DataSource& ds,
+                    TaskBuilder&& downstream_builder)
+      : m_scheduler(scheduler)
+      , m_ds(ds)
+      , m_builder(std::forward<TaskBuilder>(downstream_builder))
+    {
+      // For IO, we want to schedule the Task to run on any CPU.
+      // Once the data has been fetched, then down-stream Tasks must use the
+      // locality hints to try to remain running where it was initially fetched.
+      LocalityHint hint {
+        /* preferred_node          = */ ANY_NODE,
+        /* memory_affinity_ptr     = */ nullptr,
+        /* memory_affinity_ptr_ptr = */ nullptr
+      };
+      set_locality(hint);
+
+      // We'll assume that mem-bus utilization will be low for the IO
+      ResourceRequirements reqs{
+          /* memory_intensity = */ 1, // Scale is 1 (low) to 10 (staturated). 8 throttles
+          /* requires_gpu     = */ std::is_same_v<MemTag, ncarray::DevTag>,
+          /* custom_slots     = */ 0
+      };
+      set_resources(reqs);
+    }
+
+    void execute() override {
+      auto idx = m_ds.next();
+      if (idx == DSTraits::ExhaustedSentinel) {
+        return;
+      }
+
+      auto downstream_tasks = m_builder(idx);
+      m_scheduler.submit_dag(downstream_tasks);
+
+      auto next_gen = std::make_shared<IOGeneratorTask>(m_scheduler, m_ds, m_builder);
+
+      next_gen->add_dependency(shared_from_this());
+
+      m_scheduler.submit_dag({ next_gen });
+    }
+
+  private:
+    DagScheduler& m_scheduler;
+    DataSource& m_ds;
+    std::function<std::vector<std::shared_ptr<Task>>(StepIdxType)> m_builder;
+  };
+
 } // namespace xalgospp::scheduling
 
 #endif // XALGOSPP_SCHEDULING_TASKS_IO_HH
