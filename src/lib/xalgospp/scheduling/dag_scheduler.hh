@@ -89,6 +89,67 @@ namespace xalgospp::scheduling {
    *       memory spaces, so the generator can control this themselves. From a scheduling
    *       perspective this makes things more complex as the locality must be resolved
    *       lazily after preceeding parent Tasks have executed.
+   *
+   * On top of the base hierarchy, the scheduler uses two context-aware throttling
+   * metrics to attempt to optimize the overall throughput of the system.
+   *
+   * 1. A concurrency limit is used for memory-bound steps to avoid negative impacts
+   *    from oversubscription of available bandwidth.
+   * 2. There furthermore is a dynamic backpressure mechanism to avoid excessive
+   *    in flight Tasks from steps which are NOT memory-bound themselves.
+   *
+   * Beginning from a simple pipeline consisting of:
+   *
+   *           [ Input Data Generator ] -----> [ Memory Bound Processing Step]
+   *
+   * The overall behaviour can be modelled as:
+   *
+   *                               [ Input Generator ]
+   *                                       |
+   *                                    (Submit)
+   *                                       |
+   *                               +-------v-------+
+   *                               |   enqueue()   |
+   *                               +-------+-------+
+   *                                       |
+   *                               +-------v-------+
+   *                               |  Overloaded?  |
+   *                               +-------+-------+
+   *                                       |
+   *                       +-----+         |       +----+
+   *                 +-----| Yes |---------+-------| No |--------+
+   *                 |     +-----+                 +----+        |
+   *                 |                                           |
+   *                 v                                           v
+   *         +---------------+                           +---------------+
+   *         | Suspend Queue |             +------------>|  Queues Above |
+   *         +-------+-------+             |             +---------------+
+   *                 |                     |                     |
+   *                 |                     |             +-------v-------+
+   *                 +-------------------->+<------------|  On Complete  |
+   *                                                     +---------------+
+   *
+   * Complete control of the queueing and throttling systems is exposed via the Config
+   * which can be configured at construction. There is additionally, in the Config, an
+   * option to perform "autotuning". The DagScheduler will then attempt to optimize the
+   * parameters to maximize the throughput of the above systems. There is currently
+   * only a single simple algorithm available using basic hints from the system, the
+   * wrapped Tasks, and Little's law.
+   *
+   * The algorithm works as follows:
+   *
+   * 1. Determine the system resources.
+   * 2. Start from the input data size.
+   * 3. Using the input data size, and the memory multipliers from wrapped Task steps,
+   *    determine an average memory footprint.
+   * 4. Using the resources and footprint, find the maximum number of steps that could
+   *    be run concurrently.
+   * 5. Based on Little's law determine the minimum number of steps to hide the latency
+   *    of the input generation. Currently this uses a fixed rate, hard coded. It could
+   *    be learned, as an improvement in future versions of the algorithm.
+   * 6. From 5, calculate a target number of steps to have in flight accounting for
+   *    system jitter.
+   * 7. From 6, determine the remaining concurrency numbers.
    */
   class DagScheduler {
   public:
