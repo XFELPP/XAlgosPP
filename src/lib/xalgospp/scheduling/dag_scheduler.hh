@@ -22,8 +22,10 @@
 
 #include "xalgospp/scheduling/pool.hh"
 #include "xalgospp/scheduling/queue.hh"
+#include "xalgospp/scheduling/staging.hh"
 #include "xalgospp/scheduling/task.hh"
 
+#include <mpi.h>
 #include <spdlog/sinks/stdout_color_sinks.h>
 
 #ifdef _WIN32
@@ -104,28 +106,40 @@ namespace xalgospp::scheduling {
    *
    * The overall behaviour can be modelled as:
    *
-   *                               [ Input Generator ]
-   *                                       |
-   *                                    (Submit)
-   *                                       |
-   *                               +-------v-------+
-   *                               |   enqueue()   |
-   *                               +-------+-------+
-   *                                       |
-   *                               +-------v-------+
-   *                               |  Overloaded?  |
-   *                               +-------+-------+
-   *                                       |
-   *                       +-----+         |       +----+
-   *                 +-----| Yes |---------+-------| No |--------+
-   *                 |     +-----+                 +----+        |
-   *                 |                                           |
-   *                 v                                           v
-   *         +---------------+                           +---------------+
-   *         | Suspend Queue |             +------------>|  Queues Above |
-   *         +-------+-------+             |             +---------------+
-   *                 |                     |                     |
-   *                 |                     |             +-------v-------+
+   *                          [ Input Generator ]         [ High Mem Processing ]
+   *                                  |                             |
+   *                               (Submit)                      (Submit)
+   *                                  |                             |
+   *                               +-----------------------------------+
+   *                               |             enqueue()             |
+   *                               +-----------------------------------+
+   *                                  |                             |
+   *                               +--v------------+                |
+   *                               |  Overloaded?  |                |
+   *                               +-------+-------+                |
+   *                                       |                        |
+   *                                       |                        |
+   *                       +-----+         |       +----+           |
+   *                 +-----| Yes |<--------+------>| No |>-----+    |
+   *                 |     +-----+                 +----+      |    |
+   *                 |                                         |    |
+   *                 v                                         |    |
+   *         +---------------+                           +-----v----v----+
+   *         | Suspend Queue |             +------------>|  Queues Above |<-----------+
+   *         +-------+-------+             |             +-----v----v----+            |
+   *                 |                     |                   |    |                 |
+   *                 |                     |                   |    |                 |
+   *                 |                     |                   | +--v--+    +-----+   |
+   *                 |                     |                   | | Hm? |--->| Yes |---+
+   *                 |                     |                   | +-----+    +-----+
+   *                 |                     |                   |    |
+   *                 |                     |                   |    |
+   *                 |                     |                   | +--v--+
+   *                 |                     |                   | | No. |
+   *                 |         (Pull from suspendeded)         | +--v--+
+   *                 |          (Upon any completion)          |    |
+   *                 |                     |                   |    |
+   *                 |                     |             +-----v----v----+
    *                 +-------------------->+<------------|  On Complete  |
    *                                                     +---------------+
    *
@@ -217,6 +231,32 @@ namespace xalgospp::scheduling {
                                                      ssize_t ndim,
                                                      const ssize_t* shape,
                                                      ncarray::DType dtype);
+
+    /**
+     * Setup an Algorithm using a shared-memory MPI strategy.
+     *
+     * Algorithms which require some staged data (e.g. constant matrices) can be
+     * setup to use various MPI shared communication strategies. Doing so, however,
+     * requires preparing the memory backing this data in a particular fashion.
+     * This function simplifies this process, setting up any needed communicators
+     * as well as ensuring proper synchronization so the memory will be valid for
+     * use by an rank running the Algorithm.
+     *
+     * @tparam Algo The type of the Algorithm.
+     * @param[in] algo The Algorithm to run the data staging for.
+     * @param[in] shmem_type The granularity of the shared memory backing strategy.
+     *            The enumerator specifies from machine/node down to cache level.
+     */
+    template <class Algo>
+    void stage_algorithm(Algo& algo, ShmemType shmem_type = ShmemType::MACHINE) {
+      RCWindow win;
+
+      MPI_Comm comm = m_world_comm != MPI_COMM_NULL ? m_world_comm : MPI_COMM_WORLD;
+      prepare_shmem_mpi_algo(algo, win, m_shmem_comms, comm, shmem_type);
+      if (*win != MPI_WIN_NULL) {
+        m_algo_windows.push_back(std::move(win));
+      }
+    }
 
   private:
     /**
@@ -329,6 +369,14 @@ namespace xalgospp::scheduling {
     std::mutex m_suspension_mutex;
     std::atomic<std::size_t> m_num_suspended_generators { 0 };
     std::vector<std::shared_ptr<Task>> m_suspended_generators;
+
+    // ---- Utilities for Management when using MPI ---- //
+    MPI_Comm m_world_comm { MPI_COMM_NULL };
+    int m_world_rank { -1 };
+    int m_world_size { -1 };
+
+    std::vector<MPI_Comm> m_shmem_comms;  ///< Any communicators used for Algorithms
+    std::vector<RCWindow> m_algo_windows; ///< Backing windows for staged Algorithm data
 
     std::shared_ptr<spdlog::logger> m_logger;
   };

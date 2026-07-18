@@ -27,7 +27,9 @@
 
 #include <ncarray/custom_types.hh> // Include Float2 vectors
 #include <ncarray/dtype.hh>
+#ifdef XALG_HAS_CUDA
 #include <ncarray/expression/stencil.hh>
+#endif
 #include <ncarray/ncarrays.hh>
 
 #include <spdlog/sinks/stdout_color_sinks.h>
@@ -315,6 +317,29 @@ namespace xalgospp::det {
 
       auto* new_ptr { reinterpret_cast<PixelCalibStruct*>(m_serialized_data.data() + constants_offset) };
       m_constants = std::span<PixelCalibStruct>(new_ptr, nelem);
+
+      if constexpr (std::is_same_v<MemTag, ncarray::DevTag>) {
+#ifdef XALG_HAS_CUDA
+        constexpr ssize_t ndim { 1 };
+        ssize_t shape[ndim] { nelem };
+        ssize_t strides[ndim] { ncarray::itemsize(ncarray::DType::vfloat2) };
+        m_dev_constants = ncarray::NCOwnerFor<ncarray::DevTag>(1, shape, ncarray::DType::vfloat2);
+
+        ncarray::NCViewFor<ncarray::HostTag> consts_view(m_constants.data(),
+                                                         ndim,
+                                                         shape,
+                                                         strides,
+                                                         ncarray::DType::vfloat2,
+                                                         -1,
+                                                         true);
+        m_dev_constants.assign(consts_view);
+#else
+        throw std::runtime_error("[Calibration] DevTag requested but CUDA is not enabled!");
+#endif
+      }
+#else
+      printf("[Calibration] Constants fetching only supported on host!\n");
+#endif
     }
 
     /**
@@ -358,6 +383,44 @@ namespace xalgospp::det {
                                                                   i * raw_map.size());
           }
         }
+      } else {
+#ifdef XALG_HAS_CUDA
+        if (m_dev_constants.size() == 0) {
+          throw std::runtime_error("[Calibration] Run-time error: Device constants have not been staged!");
+        }
+
+        if (!m_stencil.has_value()) {
+          build_stencil(input);
+        }
+
+        std::size_t total_elements { input.size() };
+        auto shape { input.shape() };
+        std::size_t ndim { input.ndim() };
+        std::size_t NPIX { total_elements };
+
+        if (ndim >= 3) {
+          NPIX = 1;
+          for (std::size_t d = 1; d < ndim; ++d) {
+            NPIX *= shape[d];
+          }
+        }
+
+        int mapping_val { (m_params.mapping == CalibParameters::MappingMode::Epix10k) ? 1 : 0 };
+
+        m_stencil->apply(input,
+                         output,
+                         std::nullopt,
+                         m_dev_constants.data(),
+                         m_params.gain_shift,
+                         m_params.gain_mask,
+                         m_params.data_mask,
+                         m_params.invalid_pattern,
+                         m_params.invalid_value,
+                         mapping_val,
+                         static_cast<int>(NPIX));
+#else
+        throw std::runtime_error("[Calibration] GPU execution requested but CUDA support is disabled!");
+#endif
       }
     }
 
@@ -400,6 +463,28 @@ namespace xalgospp::det {
       std::size_t nelem { (nbytes - constants_offset) / sizeof(PixelCalibStruct) };
       m_constants = std::span<PixelCalibStruct>(reinterpret_cast<PixelCalibStruct*>(buf + constants_offset),
                                                 nelem);
+
+      if constexpr (std::is_same_v<MemTag, ncarray::DevTag>) {
+#ifdef XALG_HAS_CUDA
+        constexpr ssize_t ndim { 1 };
+        ssize_t shape[ndim] { nelem };
+        ssize_t strides[ndim] { ncarray::itemsize(ncarray::DType::vfloat2) };
+        m_dev_constants = ncarray::NCOwnerFor<ncarray::DevTag>(1,
+                                                               shape,
+                                                               ncarray::DType::vfloat2);
+
+        ncarray::NCViewFor<ncarray::HostTag> consts_view(m_constants.data(),
+                                                         ndim,
+                                                         shape,
+                                                         strides,
+                                                         ncarray::DType::vfloat2,
+                                                         -1,
+                                                         true);
+        m_dev_constants.assign(consts_view);
+#else
+        throw std::runtime_error("[Calibration] DevTag requested but CUDA is not enabled!");
+#endif
+      }
     }
 
     /**
@@ -572,6 +657,64 @@ namespace xalgospp::det {
 #endif
     }
 
+    void build_stencil(const ncarray::NCViewFor<MemTag>& input) const {
+#ifdef XALG_HAS_CUDA
+      std::vector<ncarray::StaticCoords<3>> offsets = { {0, 0, 0} };
+
+      std::vector<std::uint8_t> is_pointer_axis(3, 0);
+      for (int dim = 0; dim < 3; dim++) {
+        is_pointer_axis[dim] = input.is_pointer_axis(dim) ? 1 : 0;
+      }
+
+      ncarray::device::StencilJITExtensions ext;
+      ext.extra_params =
+        ", const float2* calib_const"
+        ", int gain_shift"
+        ", int gain_mask"
+        ", int data_mask"
+        ", int invalid_pattern"
+        ", float invalid_value"
+        ", int mapping"
+        ", int npix";
+
+      ext.epilogue_code =
+        "{\n"
+        "  const uint16_t* raw_data = reinterpret_cast<const uint16_t*>(src_data);\n"
+        "  uint16_t raw = raw_data[b_idx];\n"
+        "  int g_bits = (raw >> gain_shift) & gain_mask;\n"
+        "  if (invalid_pattern != -1 && g_bits == invalid_pattern) {\n"
+        "    reinterpret_cast<float*>(dest_data)[b_idx] = invalid_value;\n"
+        "  } else {\n"
+        "    int data_val = raw & data_mask;\n"
+        "    int g_idx = 0;\n"
+        "    if (mapping == 1) {\n"
+        "      g_idx = g_bits;\n"
+        "    } else {\n"
+        "      if (g_bits == 0) g_idx = 0;\n"
+        "      else if (g_bits == 1) g_idx = 1;\n"
+        "      else if (g_bits == 2 || g_bits == 3) g_idx = 2;\n"
+        "    }\n"
+        "    int local_idx = b_idx % npix;\n"
+        "    int seg_idx = b_idx / npix;\n"
+        "    int seg_offset = seg_idx * npix;\n"
+        "    float2 c = calib_const[g_idx * npix + seg_offset + local_idx];\n"
+        "    reinterpret_cast<float*>(dest_data)[b_idx] = (static_cast<float>(data_val) - c.x) * c.y;\n"
+        "  }\n"
+        "}\n";
+
+      auto calib_expr = [](auto views) {
+        // Return dummy value to let JIT compiler compile normally
+        return views[0] * 0.0f;
+      };
+
+      m_stencil = ncarray::Stencil<3>::create<std::uint16_t>(offsets,
+                                                             is_pointer_axis,
+                                                             calib_expr,
+                                                             ext,
+                                                             /*is_soarr=*/false);
+#endif
+    }
+
   private:
     Params m_params;
     /**
@@ -588,6 +731,12 @@ namespace xalgospp::det {
      * may be constructed over a non-owned buffer, in some cases.
      */
     std::vector<std::uint8_t> m_serialized_data;
+
+#ifdef XALG_HAS_CUDA
+    ncarray::NCOwnerFor<ncarray::DevTag> m_dev_constants;
+
+    mutable std::optional<ncarray::Stencil<3>> m_stencil;
+#endif
   };
 } // namespace xalgospp::det
 

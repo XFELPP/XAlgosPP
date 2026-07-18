@@ -75,10 +75,24 @@ namespace xalgospp::scheduling {
   DagScheduler::DagScheduler(DagScheduler::Config cfg)
     : m_config(cfg)
   {
+    int mpi_initialized { 0 };
+    MPI_Initialized(&mpi_initialized);
+    if (mpi_initialized) {
+      m_world_comm = MPI_COMM_WORLD;
+      MPI_Comm_rank(m_world_comm, &m_world_rank);
+      MPI_Comm_size(m_world_comm, &m_world_size);
+    }
+
+
     spdlog::cfg::load_env_levels("XALGOSPP_DAG_LOG_LEVEL");
-    auto logger = spdlog::get("XAlgosPP::Scheduling::DagScheduler");
+    std::string logger_name { "XAlgosPP::Scheduling::DagScheduler" };
+    if (mpi_initialized && m_world_rank >= 0) {
+      logger_name += "::Rank" + std::to_string(m_world_rank);
+    }
+
+    auto logger = spdlog::get(logger_name);
     if (!logger) {
-      m_logger = spdlog::stdout_color_mt("XAlgosPP::Scheduling::DagScheduler");
+      m_logger = spdlog::stdout_color_mt(logger_name);
     } else {
       m_logger = logger;
     }
@@ -140,6 +154,16 @@ namespace xalgospp::scheduling {
         worker.join();
       }
     }
+
+    // After tearing down queues, cleanup any Algorithm data we prepared
+    m_algo_windows.clear();
+    for (auto& comm : m_shmem_comms) {
+      if (comm != MPI_COMM_NULL) {
+        MPI_Comm_free(&comm);
+        comm = MPI_COMM_NULL;
+      }
+    }
+    m_shmem_comms.clear();
   }
 
   bool DagScheduler::pin_thread_to_cores(const std::vector<int>& core_ids) {
@@ -247,6 +271,33 @@ namespace xalgospp::scheduling {
     }
 
     std::size_t system_ram { get_system_ram_bytes() };
+
+    // Account for MPI world - specifically, ranks on this same node
+    int local_size { 1 };
+    if (m_world_comm != MPI_COMM_NULL) {
+      // If we staged Algorithms, the first of m_shmem_comms is the node-level comm
+      if (!m_shmem_comms.empty()) {
+        auto& node_comm = m_shmem_comms[0];
+
+        MPI_Comm_size(node_comm, &local_size);
+      } else {
+        // Otherwise, we will create one
+        MPI_Comm node_comm { MPI_COMM_NULL };
+        MPI_Comm_split_type(m_world_comm,
+                            MPI_COMM_TYPE_SHARED,
+                            0,
+                            MPI_INFO_NULL,
+                            &node_comm);
+        if (node_comm != MPI_COMM_NULL) {
+          MPI_Comm_size(node_comm, &local_size);
+          MPI_Comm_free(&node_comm);
+        } else {
+          m_logger->error("Tried to create a node-local communicator but failed!");
+        }
+      }
+    }
+    system_ram /= local_size;
+
     std::size_t total_workers { m_workers.size() };
 
     std::size_t raw_frame_size { m_config.raw_frame_size_bytes };

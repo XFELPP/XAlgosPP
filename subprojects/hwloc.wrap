@@ -1,0 +1,7 @@
+[wrap-git]
+directory = hwloc
+url = https://github.com/open-mpi/hwloc.git
+revision = hwloc-2.12.2
+depth = 1
+
+patch_directory = hwloc

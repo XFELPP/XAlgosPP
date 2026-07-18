@@ -240,11 +240,13 @@ int main(int argc, char* argv[]) {
     auto calib_algo = std::make_shared<Calibrator>(params);
     //calib_algo->print_configuration();
     //calib_algo->stage();
-    det.prepare_group_algorithm(*calib_algo);
+    //det.prepare_group_algorithm(*calib_algo);
 
     {
       // ---- Prepare and launch the workflow ---- //
       xalgospp::scheduling::DagScheduler scheduler(scheduler_cfg);
+
+      scheduler.stage_algorithm(*calib_algo);
 
       ssize_t ndim { 3 };
       ssize_t shape[3] { 32, 512, 1024 };

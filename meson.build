@@ -276,9 +276,22 @@ else
     if not found_mpi
         warning('MPI was requested, but was not built!')
     else
+        message('Adding MPI Dependency')
+
         add_project_arguments('-DSBIO_HAS_MPI', language: ['cpp', 'cuda'])
         add_project_arguments('-DXALG_HAS_MPI', language: ['cpp', 'cuda'])
         deps_for_xalgospp += mpi_dep
+
+        # ---------------------- Also will use `hwloc` ---------------------- #
+        hwloc_dep = dependency('hwloc', required: false)
+        if not hwloc_dep.found()
+            message('Falling back to building hwloc by subproject.')
+
+            hwloc_proj = subproject('hwloc')
+            hwloc_dep = hwloc_proj.get_variable('hwloc_dep')
+        endif
+        message('Adding the `hwloc` dependency.')
+        deps_for_xalgospp += hwloc_dep
     endif
 endif # MPI builds
 

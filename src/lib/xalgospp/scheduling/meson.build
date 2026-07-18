@@ -1,6 +1,7 @@
 installed_scheduling_headers = [
     'dag_scheduler.hh',
     'queue.hh',
+    'staging.hh',
     'task.hh',
 ]
 
