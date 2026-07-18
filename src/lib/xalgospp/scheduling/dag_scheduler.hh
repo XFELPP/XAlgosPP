@@ -109,11 +109,27 @@ namespace xalgospp::scheduling {
        * The threshold at which throttling will begin for high-memory-bandwidth tasks.
        */
       std::size_t max_concurrent_high_mem { 2 };
+      /**
+       * A generalized concurrency limit for suspension of generator Tasks (if enabled).
+       */
+      std::size_t max_concurrency_multiplier { 8 };
+      /**
+       * Whether back pressure monitoring for generator Tasks should be enabled.
+       */
+      bool enable_dynamic_backpressure { true };
+      /**
+       * Allow the Scheduler to automatically determine resource and queue parameters.
+       */
+      bool enable_autotuning { true };
+      /**
+       * Raw frame size used for auto-tuning. Auto-determined if set to 0.
+       */
+      std::size_t raw_frame_size_bytes { 0 };
     };
 
     // NOTE: There seems to be a bug in both GCC and clang - Config{} will
     // not compile here. Seems related: https://gcc.gnu.org/bugzilla/show_bug.cgi?id=88165
-    explicit DagScheduler(Config cfg = Config {0, 0, true, 2});
+    explicit DagScheduler(Config cfg = Config { 0, 0, true, 2, 2, true, true, 0 });
     ~DagScheduler();
 
     /**
@@ -196,6 +212,27 @@ namespace xalgospp::scheduling {
      */
     std::map<numa_node_t, std::vector<int>> detect_numa_topology();
 
+    /**
+     * When dynamic back-pressure monitoring is enabled, decide whether to throttle.
+     *
+     * @returns When using the back-pressure system, returns true if throttling should
+     *          begin for back pressure. Otherwise, false.
+     */
+    bool should_throttle_generators();
+
+    /**
+     * Determine system memory resources.
+     *
+     * @returns If on Linux, and it could be determined, the available ram.
+     *          Otherwise, it just returns 16 GB for now.
+     */
+    std::size_t get_system_ram_bytes();
+
+    /**
+     * Run the automatic parameter tuning.
+     */
+    void perform_autotune();
+
     Config m_config;
     std::map<numa_node_t, std::vector<int>> m_topology;    ///< Mapping of node topology
     std::vector<std::thread> m_workers;                    ///< Complete set of workers
@@ -226,6 +263,11 @@ namespace xalgospp::scheduling {
     // ---- Synchronization primitives and memory for shared buffer pools ---- //
     std::mutex m_pool_mutex;
     std::map<PoolKey, std::shared_ptr<ArrayBufferPool>> m_pools;
+
+    // ---- Synchronization primitives and state for back pressure monitoring ---- //
+    std::mutex m_suspension_mutex;
+    std::atomic<std::size_t> m_num_suspended_generators { 0 };
+    std::vector<std::shared_ptr<Task>> m_suspended_generators;
 
     std::shared_ptr<spdlog::logger> m_logger;
   };

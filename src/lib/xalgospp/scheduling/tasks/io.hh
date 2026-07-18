@@ -32,7 +32,6 @@
 #include <type_traits>
 
 namespace xalgospp::scheduling {
-
   template <class DataSource, class DataFetcher, class MemTag = ncarray::HostTag>
   class ReadImageTask : public Task {
   public:
@@ -115,7 +114,7 @@ namespace xalgospp::scheduling {
     mutable const void* m_ptr { nullptr };
   };
 
-  template <class DataSource>
+  template <class DataSource, class MemTag = ncarray::HostTag>
   class IOGeneratorTask : public Task {
   public:
     using DSTraits = typename DataSource::DSTraits;
@@ -140,7 +139,7 @@ namespace xalgospp::scheduling {
       set_locality(hint);
 
       // We'll assume that mem-bus utilization will be low for the IO
-      ResourceRequirements reqs{
+      ResourceRequirements reqs {
           /* memory_intensity = */ 1, // Scale is 1 (low) to 10 (staturated). 8 throttles
           /* requires_gpu     = */ std::is_same_v<MemTag, ncarray::DevTag>,
           /* custom_slots     = */ 0
@@ -149,20 +148,23 @@ namespace xalgospp::scheduling {
     }
 
     void execute() override {
-      auto idx = m_ds.next();
+      auto idx { m_ds.next() };
+
       if (idx == DSTraits::ExhaustedSentinel) {
         return;
       }
 
-      auto downstream_tasks = m_builder(idx);
+      auto downstream_tasks { m_builder(idx) };
+
       m_scheduler.submit_dag(downstream_tasks);
 
       auto next_gen = std::make_shared<IOGeneratorTask>(m_scheduler, m_ds, m_builder);
-
       next_gen->add_dependency(shared_from_this());
 
       m_scheduler.submit_dag({ next_gen });
     }
+
+    bool is_generator() const override { return true; }
 
   private:
     DagScheduler& m_scheduler;

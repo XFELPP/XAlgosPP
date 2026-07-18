@@ -99,6 +99,11 @@ namespace xalgospp::scheduling {
       m_pending_parents.fetch_add(1, std::memory_order_relaxed);
     }
 
+    /**
+     * This flag determines whether the Task will generate new sub-DAGs.
+     */
+    virtual bool is_generator() const { return false; }
+
   private:
     friend class DagScheduler;
 

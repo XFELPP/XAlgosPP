@@ -79,6 +79,8 @@ namespace xalgospp::scheduling {
     auto logger = spdlog::get("XAlgosPP::Scheduling::DagScheduler");
     if (!logger) {
       m_logger = spdlog::stdout_color_mt("XAlgosPP::Scheduling::DagScheduler");
+    } else {
+      m_logger = logger;
     }
 
     m_topology = detect_numa_topology();
@@ -221,6 +223,80 @@ namespace xalgospp::scheduling {
     return topology;
   }
 
+  bool DagScheduler::should_throttle_generators() {
+    std::size_t total_workers { m_workers.size() };
+    std::size_t unfinished { m_unfinished_tasks.load(std::memory_order_acquire) };
+
+    return unfinished >= total_workers * m_config.max_concurrency_multiplier;
+  }
+
+  std::size_t DagScheduler::get_system_ram_bytes() {
+#ifdef __linux__
+    long pages { sysconf(_SC_PHYS_PAGES) };
+    long page_size { sysconf(_SC_PAGE_SIZE) };
+    if (pages > 0 && page_size > 0) {
+      return static_cast<std::size_t>(pages) * page_size;
+    }
+#endif
+    return 16ULL * 1024 * 1024 * 1024; // Dumb fallback on 16 GB ram
+  }
+
+  void DagScheduler::perform_autotune() {
+    if (!m_config.enable_autotuning) {
+      return;
+    }
+
+    std::size_t system_ram { get_system_ram_bytes() };
+    std::size_t total_workers { m_workers.size() };
+
+    std::size_t raw_frame_size { m_config.raw_frame_size_bytes };
+
+    if (raw_frame_size == 0) {
+      std::lock_guard<std::mutex> lock(m_pool_mutex);
+      if (!m_pools.empty()) {
+        auto& pool = m_pools.begin()->second;
+
+        raw_frame_size = pool->buffer_size_bytes();
+      }
+    }
+
+    if (raw_frame_size == 0) {
+      return;
+    }
+
+    // TODO: Get multipliers from the wrapped Tasks.
+    // TODO: Structure the time estimates somehow from teh wrapped Task...
+    //       Or learn it.
+    std::size_t mem_per_step { raw_frame_size * 3 }; // TODO: Get multiplier
+    std::size_t max_steps_by_ram { (system_ram / 2) / mem_per_step };
+
+    // Little's Law target: N_steps = Throughput * Latency
+    double t_io { 0.002 };           // 2ms  IO
+    double t_downstream { 0.010 };   // 10ms Downstream compute
+    double ideal_throughput { total_workers / t_downstream };
+    std::size_t min_steps { std::ceil(ideal_throughput * (t_io + t_downstream)) };
+
+    // Target steps in flight with a 2x jitter buffer
+    std::size_t target_steps { std::min(min_steps * 2, max_steps_by_ram) };
+    target_steps = std::max(target_steps, min_steps);
+
+    std::size_t tasks_per_step { 3 };
+    m_config.max_concurrency_multiplier =
+      std::ceil(static_cast<double>(target_steps * tasks_per_step) / total_workers);
+
+    m_config.max_concurrency_multiplier =
+      std::max(std::size_t(4), m_config.max_concurrency_multiplier);
+
+    m_config.max_concurrent_high_mem = std::max(std::size_t(1), m_workers.size() / 4);
+    m_logger->info("[Autotuner] Tuned max_concurrency_multiplier to {} (Target steps in flight: {})",
+                   m_config.max_concurrency_multiplier,
+                   target_steps);
+    m_logger->info("[Autotuner] Tuned max_concurrent_high_mem to {}",
+                   m_config.max_concurrent_high_mem);
+
+    m_config.enable_autotuning = false;
+  }
+
   numa_node_t DagScheduler::resolve_locality(const LocalityHint& hint) {
     if (hint.preferred_node != ANY_NODE) {
       return hint.preferred_node;
@@ -259,6 +335,18 @@ namespace xalgospp::scheduling {
   void DagScheduler::submit_dag(std::vector<std::shared_ptr<Task>> tasks) {
     m_unfinished_tasks.fetch_add(tasks.size(), std::memory_order_release);
 
+    if (m_config.enable_autotuning) {
+      bool initialized_pools { false };
+      {
+        std::lock_guard<std::mutex> lock(m_pool_mutex);
+        initialized_pools = !m_pools.empty();
+      }
+
+      if (initialized_pools) {
+        perform_autotune();
+      }
+    }
+
     // Only enquee tasks that are not waiting on the resolution of outstanding work
     for (auto& task : tasks) {
       if (task->m_pending_parents.load(std::memory_order_acquire) == 0) {
@@ -269,6 +357,16 @@ namespace xalgospp::scheduling {
 
   void DagScheduler::enqueue(std::shared_ptr<Task> task) {
     numa_node_t target_node { resolve_locality(task->locality()) };
+
+    if (m_config.enable_dynamic_backpressure && task->is_generator()) {
+      std::lock_guard<std::mutex> lock(m_suspension_mutex);
+
+      if (should_throttle_generators()) {
+        m_suspended_generators.push_back(std::move(task));
+        m_num_suspended_generators.fetch_add(1, std::memory_order_release);
+        return;
+      }
+    }
 
     {
       std::lock_guard<std::mutex> lock(m_cv_mutex);
@@ -307,10 +405,29 @@ namespace xalgospp::scheduling {
     // Need to clear this to avoid some cycles which caused memory leaks
     // The child is queued up, so the parent can drop the reference now
     completed_task->m_children.clear();
+    completed_task.reset();
 
-    if (m_unfinished_tasks.fetch_sub(1, std::memory_order_acq_rel) == 1) {
+    std::size_t remaining {
+      m_unfinished_tasks.fetch_sub(1, std::memory_order_acq_rel) - 1
+    };
+
+    if (remaining == 0) {
       std::lock_guard<std::mutex> lock(m_wait_mutex);
       m_wait_cv.notify_all();
+    }
+
+    std::vector<std::shared_ptr<Task>> to_resume;
+    if (m_num_suspended_generators.load(std::memory_order_acquire) > 0) {
+      std::lock_guard<std::mutex> lock(m_suspension_mutex);
+      if (!should_throttle_generators() && !m_suspended_generators.empty()) {
+        to_resume = std::move(m_suspended_generators);
+        m_suspended_generators.clear();
+        m_num_suspended_generators.store(0, std::memory_order_release);
+      }
+    }
+
+    for (auto& gen_task : to_resume) {
+      enqueue(std::move(gen_task));
     }
   }
 
