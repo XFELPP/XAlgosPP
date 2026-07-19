@@ -325,7 +325,9 @@ namespace xalgospp::scheduling {
     double t_io { 0.002 };           // 2ms  IO
     double t_downstream { 0.010 };   // 10ms Downstream compute
     double ideal_throughput { total_workers / t_downstream };
-    std::size_t min_steps { std::ceil(ideal_throughput * (t_io + t_downstream)) };
+    std::size_t min_steps {
+      static_cast<std::size_t>(std::ceil(ideal_throughput * (t_io + t_downstream)))
+    };
 
     // Target steps in flight with a 2x jitter buffer
     std::size_t target_steps { std::min(min_steps * 2, max_steps_by_ram) };
@@ -512,7 +514,7 @@ namespace xalgospp::scheduling {
 
       if (!task) {
         for (std::size_t i = 1; i < num_numa_nodes; ++i) {
-          numa_node_t remote_node { (home_node + i) % num_numa_nodes };
+          numa_node_t remote_node { static_cast<int>((home_node + i) % num_numa_nodes) };
           task = m_node_queues[remote_node]->steal();
 
           // m_logger->trace("Worker from Node {} stealing work from {}.",

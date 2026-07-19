@@ -28,10 +28,107 @@
 #endif
 #include <ncarray/storage.hh>
 
+#include <errno.h>
+#include <fcntl.h>
+#include <unistd.h>
+
+#include <atomic>
+#include <cstddef>
+#include <limits>
 #include <memory>
+#include <stdexcept>
 #include <type_traits>
 
 namespace xalgospp::scheduling {
+
+  struct DummyDSTraits {
+    using StepIdxType = std::size_t;
+    static constexpr StepIdxType ExhaustedSentinel =
+      std::numeric_limits<StepIdxType>::max();
+  };
+
+  class DummyDataSource {
+  public:
+    using DSTraits = DummyDSTraits;
+    using StepIdxType = typename DSTraits::StepIdxType;
+
+    DummyDataSource(std::size_t max_steps)
+      : m_max_steps(max_steps)
+    {}
+
+    StepIdxType next() {
+      std::size_t current { m_step.fetch_add(1, std::memory_order_relaxed) };
+
+      if (current >= m_max_steps) {
+        return DSTraits::ExhaustedSentinel;
+      }
+
+      return current;
+    }
+
+  private:
+    std::size_t m_max_steps;
+    std::atomic<std::size_t> m_step { 0 };
+  };
+
+  class RandomDeviceReader {
+  public:
+    explicit RandomDeviceReader(const char* device_path = "/dev/urandom") {
+      m_fd = ::open(device_path, O_RDONLY);
+
+      if (m_fd < 0) {
+        throw std::runtime_error(std::string("Failed to open ") + device_path);
+      }
+    }
+
+    ~RandomDeviceReader() {
+      if (m_fd >= 0) {
+        ::close(m_fd);
+      }
+    }
+
+    RandomDeviceReader(const RandomDeviceReader&) = delete;
+    RandomDeviceReader& operator=(const RandomDeviceReader&) = delete;
+
+    RandomDeviceReader(RandomDeviceReader&& other) noexcept
+      : m_fd(other.m_fd)
+    {
+      other.m_fd = -1;
+    }
+
+    RandomDeviceReader& operator=(RandomDeviceReader&& other) noexcept {
+      if (this != &other) {
+        if (m_fd >= 0) ::close(m_fd);
+        m_fd = other.m_fd;
+        other.m_fd = -1;
+      }
+      return *this;
+    }
+
+    void read_bytes(void* dest, std::size_t bytes_to_read) {
+      std::size_t bytes_read { 0 };
+      char* ptr { reinterpret_cast<char*>(dest) };
+
+      while (bytes_read < bytes_to_read) {
+        ssize_t res { ::read(m_fd, ptr + bytes_read, bytes_to_read - bytes_read) };
+        if (res < 0) {
+          if (errno == EINTR) {
+            continue;
+          }
+
+          throw std::runtime_error("Error reading from random device");
+        } else if (res == 0) {
+          throw std::runtime_error("Unexpected EOF on random device");
+        }
+
+        bytes_read += res;
+      }
+    }
+
+  private:
+    int m_fd { -1 };
+  };
+
   template <class DataSource, class DataFetcher, class MemTag = ncarray::HostTag>
   class ReadImageTask : public Task {
   public:
@@ -140,9 +237,9 @@ namespace xalgospp::scheduling {
 
       // We'll assume that mem-bus utilization will be low for the IO
       ResourceRequirements reqs {
-          /* memory_intensity = */ 1, // Scale is 1 (low) to 10 (staturated). 8 throttles
-          /* requires_gpu     = */ std::is_same_v<MemTag, ncarray::DevTag>,
-          /* custom_slots     = */ 0
+        /* memory_intensity = */ 1, // Scale is 1 (low) to 10 (staturated). 8 throttles
+        /* requires_gpu     = */ std::is_same_v<MemTag, ncarray::DevTag>,
+        /* custom_slots     = */ 0
       };
       set_resources(reqs);
     }

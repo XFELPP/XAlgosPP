@@ -1,7 +1,8 @@
-#include "xalgospp/scheduling/dag_scheduler.hh"
-#include "xalgospp/scheduling/tasks/io.hh"
-#include "xalgospp/scheduling/tasks/analysis.hh"
 #include "xalgospp/detector/calibration.hh"
+#include "xalgospp/scheduling/dag_scheduler.hh"
+#include "xalgospp/scheduling/staging.hh"
+#include "xalgospp/scheduling/tasks/analysis.hh"
+#include "xalgospp/scheduling/tasks/io.hh"
 
 #include <sbio/core/datasource.hh>
 #include <sbio/formats/xtc2/xtc2_traits.hh>
@@ -12,7 +13,7 @@
 #include <sbio/xtc2_broker.hh>
 
 #include <mpi.h>
-//#include <ncarray/ncarrays.hh>
+#include <ncarray/ncarrays.hh>
 
 #include <unistd.h>
 
@@ -27,22 +28,39 @@
 
 void usage(char* progname) {
   std::cerr << "Usage: " << progname
-            << " [-d <det_name>] -e <experiment> [-h] [-m <max_hm>] [-n <n_iter>]"
-            << " [-o <off_per_read>] -r <run_num> [-t <threads_per_node>]"
-            << std::endl
+    // --- Scheduler settings --- //
+            << " [-a <autotune>] [-b <back pressure>] [-m <max_hm>] [-s <shmem_type>]"
+            << " [-t <threads>]"
+    // --- Fake Data or Real Data --- //
+            << " [[-d <det_name>] -e <experiment> -r <run_num> [-o <off_per_read>]]"
+            << " [-f [-n <niter>]]"
+    // --- Printing, help etc. --- //
+            << " [-h] [-p <interval>]" << std::endl
             << std::endl
             << R"a(
 Test the DagScheduler for the given configuration.
 
 Args:
-  -d <det_name>   Detector name. Default: `jungfrau`
-  -e <experiment> Experiment to load data from.
-  -h              Display help and exit.
-  -m <max_hm>     Max concurrent high-memory-bandwidth tasks. Default: 2.
-  -n <niter>      Number of iterations for timing. Default: 100.
-  -o <off_read>   Offsets to fetch per .smd.xtc2 read. Default: 40000.
-  -r <run_number> Run to load data from.
-  -t <threads>    Threads per node. Default: 0.
+  -a <autotune>      Whether to autotune. If 1, the other scheduler params are ignored
+                     except backpressure settings. Default: 1.
+  -b <back pressure> Enable dynamic back pressure throttling. Default: 1.
+  -d <det_name>      Detector name. Default: `jungfrau`
+  -e <experiment>    Experiment to load data from.
+  -f                 Use fake generated data.
+  -h                 Display help and exit.
+  -m <max_hm>        Max concurrent high-memory-bandwidth tasks. Default: 2.
+  -n <niter>         Number of iterations for timing. Default: 100.
+  -o <off_read>      Offsets to fetch per .smd.xtc2 read. Default: 40000.
+  -p <interval>      Print a message every <interval> steps. If 0, don't print. Default: 0.
+  -r <run_number>    Run to load data from.
+  -s <shmem_type>    The granularity of the shared memory allocation for constants:
+                       - 0 = Machine/Node.
+                       - 1 = Per-socket.
+                       - 2 = Per NUMA domain
+                       - 3 = Per L3 Cache
+                       - 4 = Per L2 Cache
+                     Default: 0 --> 1 copy of constants per node/machine.
+  -t <threads>       Threads per node. Default: 0.
 )a" << std::endl;
 }
 
@@ -58,15 +76,36 @@ int main(int argc, char* argv[]) {
   unsigned run_num { 0 };
   std::size_t threads_per_node { 0 };
   unsigned n_iter { 100 };
+  bool autotune { true };
+  bool backpressure { true };
 
-  while ((c = getopt(argc, argv, "d:e:hm:n:o:r:t:")) != -1) {
+  unsigned print_interval { 0 };
+  bool use_fake_generator { false };
+
+  using xalgospp::scheduling::ShmemType;
+
+  ShmemType shmem_type { ShmemType::MACHINE };
+
+  while ((c = getopt(argc, argv, "a:b:d:e:fhm:n:o:p:r:s:t:")) != -1) {
     switch (c) {
+    case 'a': {
+      autotune = static_cast<bool>(std::atoi(optarg));
+      break;
+    }
+    case 'b': {
+      backpressure = static_cast<bool>(std::atoi(optarg));
+      break;
+    }
     case 'd': {
       det_name = optarg;
       break;
     }
     case 'e': {
       experiment = optarg;
+      break;
+    }
+    case 'f': {
+      use_fake_generator = true;
       break;
     }
     case 'h': {
@@ -85,8 +124,23 @@ int main(int argc, char* argv[]) {
       events_per_read = static_cast<unsigned>(std::atoi(optarg));
       break;
     }
+    case 'p': {
+      print_interval = static_cast<unsigned>(std::atoi(optarg));
+      break;
+    }
     case 'r': {
       run_num = static_cast<unsigned>(std::atoi(optarg));
+      break;
+    }
+    case 's': {
+      int st { std::atoi(optarg) };
+      if (st < 0 || st > 4) {
+        std::cerr << "Shared memory granarity must be between [0, 4]!"
+                  << std::endl << std::endl;
+        usage(argv[0]);
+        exit(0);
+      }
+      shmem_type = static_cast<ShmemType>(std::atoi(optarg));
       break;
     }
     case 't': {
@@ -117,19 +171,15 @@ int main(int argc, char* argv[]) {
 
   using MPIDataSource = DataSource<
     SyncPOSIXIO,
-    //MPIExecution,
     MPIThreadedExecution,
     XTC2Traits,
-    //XTC2StreamBroker<SyncPOSIXIO, MPIExecution>
     XTC2StreamBroker<SyncPOSIXIO, MPIThreadedExecution>
   >;
 
   using SerialDataSource = DataSource<
     SyncPOSIXIO,
-    //SerialExecution,
     ThreadedExecution,
     XTC2Traits,
-    //XTC2StreamBroker<SyncPOSIXIO, SerialExecution>
     XTC2StreamBroker<SyncPOSIXIO, ThreadedExecution>
   >;
 
@@ -210,13 +260,20 @@ int main(int argc, char* argv[]) {
 
     // ---- Setup configuration for the scheduler ---- //
     xalgospp::scheduling::DagScheduler::Config scheduler_cfg {
-      /* num_numa_nodes          = */ 0,                // auto-detect
-      /* threads_per_node        = */ threads_per_node, // 0 would be auto-detect
-      /* enable_pinning          = */ true,
-      /* max_concurrent_high_mem = */ max_concurrent_hm
+      /* num_numa_nodes              = */ 0,                // auto-detect
+      /* threads_per_node            = */ threads_per_node, // 0 would be auto-detect
+      /* enable_pinning              = */ true,
+      /* max_concurrent_high_mem     = */ max_concurrent_hm,
+      /* max_concurrency_multiplier  = */ 32,
+      /* enable_dynamic_backpressure = */ backpressure,
+      /* enable_autotuning           = */ autotune
     };
 
-    auto fetcher = [&det](typename XTC2Traits::StepIdxType idx) {
+    auto fetcher = [&det, print_interval](typename XTC2Traits::StepIdxType idx) {
+      if (print_interval && (idx % print_interval == 0)) {
+        std::cout << "Processing step: " << idx << std::endl;
+      }
+
       return det.get_data(idx, "raw", "raw");
     };
 
@@ -238,55 +295,123 @@ int main(int argc, char* argv[]) {
     params.det_serial_no = det_serial_number;
 
     auto calib_algo = std::make_shared<Calibrator>(params);
-    //calib_algo->print_configuration();
-    //calib_algo->stage();
-    //det.prepare_group_algorithm(*calib_algo);
+
+    // We used the real datasource to get constants. If generating fake data, setup
+    // now
+    using xalgospp::scheduling::DummyDataSource;
+    xalgospp::scheduling::DummyDataSource fake_ds(n_iter);
 
     {
       // ---- Prepare and launch the workflow ---- //
       xalgospp::scheduling::DagScheduler scheduler(scheduler_cfg);
 
-      scheduler.stage_algorithm(*calib_algo);
+      scheduler.stage_algorithm(*calib_algo, shmem_type);
+
+      //std::size_t frame_count { 0 };
+      std::atomic<std::size_t> frame_count { 0 };
 
       ssize_t ndim { 3 };
       ssize_t shape[3] { 32, 512, 1024 };
 
-      std::size_t frame_count { 0 };
+      std::size_t num_elements { 32 * 512 * 1024 };
+      std::size_t total_bytes { num_elements * sizeof(std::uint16_t) };
 
-      auto builder = [&](typename XTC2Traits::StepIdxType idx) {
-        auto read_task { xalgospp::scheduling::make_read_image_task(ds, fetcher, idx) };
-        using AlgTask = xalgospp::scheduling::AlgorithmTask<
-          Calibrator,
-          typename decltype(read_task)::element_type
-        >;
+      if (use_fake_generator) {
+        auto random_reader =
+            std::make_shared<xalgospp::scheduling::RandomDeviceReader>("/dev/urandom");
 
-        auto calib_task = std::make_shared<AlgTask>(scheduler, calib_algo, read_task);
+        auto circular_buffers = std::make_shared<std::vector<ncarray::NCArray>>();
+        for (int i = 0; i < 4; ++i) {
+          circular_buffers->emplace_back(ndim, shape, ncarray::DType::uint16);
+        }
 
-        calib_task->add_dependency(read_task);
+        //auto fake_fetcher = [random_reader, circular_buffers, total_bytes](std::size_t step_idx) {
+        auto fake_fetcher = [&](std::size_t idx) {
+          auto& arr = (*circular_buffers)[idx % circular_buffers->size()];
+          random_reader->read_bytes(arr.data(), total_bytes);
 
-        return std::vector<std::shared_ptr<xalgospp::scheduling::Task>>{read_task, calib_task};
-      };
+          auto fake_view = arr.view();
+          return fake_view;
+        };
 
-      auto start = std::chrono::high_resolution_clock::now();
-      auto init_gen =
-        std::make_shared<xalgospp::scheduling::IOGeneratorTask<decltype(ds)>>(scheduler,
-                                                                              ds,
-                                                                              builder);
-      scheduler.submit_dag({ init_gen });
+        auto builder = [&] (std::size_t idx) {
+          frame_count.fetch_add(1, std::memory_order_relaxed);
 
-      scheduler.wait_all();
-      auto end = std::chrono::high_resolution_clock::now();
+          auto read_task {
+            xalgospp::scheduling::make_read_image_task(fake_ds, fake_fetcher, idx)
+          };
 
-      std::chrono::duration<double> diff { end - start };
-      double total_time_s { diff.count() };
+          using AlgTask = xalgospp::scheduling::AlgorithmTask<
+            Calibrator,
+            typename decltype(read_task)::element_type
+          >;
 
-      double per_evt_time_s { total_time_s / n_iter };
-      double per_evt_rate_hz { 1 / per_evt_time_s} ;
+          auto calib_task = std::make_shared<AlgTask>(scheduler, calib_algo, read_task);
 
-      std::cout << "Successfully processed " << frame_count << " frames with DagScheduler." << std::endl
-                << " - Processing took: " << total_time_s << " seconds." << std::endl
-                << " - Per event time was: " << per_evt_time_s << " seconds" << std::endl
-                << " - Per event rate was: " << per_evt_rate_hz << " events/s" << std::endl;
+          calib_task->add_dependency(read_task);
+
+          return std::vector<std::shared_ptr<xalgospp::scheduling::Task>>{read_task, calib_task};
+        };
+
+        auto start = std::chrono::high_resolution_clock::now();
+        auto init_gen =
+          std::make_shared<xalgospp::scheduling::IOGeneratorTask<decltype(fake_ds)>>(scheduler,
+                                                                                     fake_ds,
+                                                                                     builder);
+        scheduler.submit_dag({ init_gen });
+
+        scheduler.wait_all();
+        auto end = std::chrono::high_resolution_clock::now();
+
+        std::chrono::duration<double> diff { end - start };
+        double total_time_s { diff.count() };
+
+        double per_evt_time_s { total_time_s / frame_count };
+        double per_evt_rate_hz { 1 / per_evt_time_s };
+
+        std::cout << "Successfully processed " << frame_count << " frames with DagScheduler." << std::endl
+                  << " - Processing took: " << total_time_s << " seconds." << std::endl
+                  << " - Per event time was: " << per_evt_time_s << " seconds" << std::endl
+                  << " - Per event rate was: " << per_evt_rate_hz << " events/s" << std::endl;
+      } else {
+
+        auto builder = [&](typename XTC2Traits::StepIdxType idx) {
+          frame_count++;
+
+          auto read_task { xalgospp::scheduling::make_read_image_task(ds, fetcher, idx) };
+          using AlgTask = xalgospp::scheduling::AlgorithmTask<
+            Calibrator,
+            typename decltype(read_task)::element_type
+          >;
+
+          auto calib_task = std::make_shared<AlgTask>(scheduler, calib_algo, read_task);
+
+          calib_task->add_dependency(read_task);
+
+          return std::vector<std::shared_ptr<xalgospp::scheduling::Task>>{read_task, calib_task};
+        };
+
+        auto start = std::chrono::high_resolution_clock::now();
+        auto init_gen =
+          std::make_shared<xalgospp::scheduling::IOGeneratorTask<decltype(ds)>>(scheduler,
+                                                                                ds,
+                                                                                builder);
+        scheduler.submit_dag({ init_gen });
+
+        scheduler.wait_all();
+        auto end = std::chrono::high_resolution_clock::now();
+
+        std::chrono::duration<double> diff { end - start };
+        double total_time_s { diff.count() };
+
+        double per_evt_time_s { total_time_s / frame_count };
+        double per_evt_rate_hz { 1 / per_evt_time_s };
+
+        std::cout << "Successfully processed " << frame_count << " frames with DagScheduler." << std::endl
+                  << " - Processing took: " << total_time_s << " seconds." << std::endl
+                  << " - Per event time was: " << per_evt_time_s << " seconds" << std::endl
+                  << " - Per event rate was: " << per_evt_rate_hz << " events/s" << std::endl;
+      }
     }
   }
 

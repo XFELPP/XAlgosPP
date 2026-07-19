@@ -151,75 +151,56 @@ namespace xalgospp::scheduling {
         hwloc_cpuset_t cpuset { hwloc_bitmap_alloc() };
         hwloc_get_cpubind(topology, cpuset, HWLOC_CPUBIND_PROCESS);
 
-        hwloc_obj_t obj { hwloc_get_obj_covering_cpuset(topology, cpuset) };
+        hwloc_obj_t obj { nullptr };
+        int first_cpu { hwloc_bitmap_first(cpuset) };
+        if (first_cpu != -1) {
+          hwloc_obj_t pu_obj { hwloc_get_pu_obj_by_os_index(topology, first_cpu) };
+          if (pu_obj) {
+            obj = pu_obj;
+          }
+        }
 
         hwloc_obj_type_t topo_type;
         bool set_topo_type { false };
 
         if (shmem_type == ShmemType::SOCKET) {
-#ifdef OMPI_COMM_TYPE_SOCKET
-        // OpenMPI provides some specific variants, MPICH does not, e..g
-        MPI_Comm_split_type(node_comm,
-                            OMPI_COMM_TYPE_SOCKET,
-                            0,
-                            MPI_INFO_NULL,
-                            &shmem_comm);
-#else
         topo_type = HWLOC_OBJ_PACKAGE;
-        set_topo_type = true;
-#endif
         } else if (shmem_type == ShmemType::NUMA) {
-#ifdef OMPI_COMM_TYPE_NUMA
-          MPI_Comm_split_type(node_comm,
-                              OMPI_COMM_TYPE_NUMA,
-                              0,
-                              MPI_INFO_NULL,
-                              &shmem_comm);
-#else
           topo_type = HWLOC_OBJ_NUMANODE;
-          set_topo_type = true;
-#endif
         } else if (shmem_type == ShmemType::L3CACHE) {
-#ifdef OMPI_COMM_TYPE_L3CACHE
-          MPI_Comm_split_type(node_comm,
-                              OMPI_COMM_TYPE_L3CACHE,
-                              0,
-                              MPI_INFO_NULL,
-                              &shmem_comm);
-#else
           topo_type = HWLOC_OBJ_L3CACHE;
-          set_topo_type = true;
-#endif
         } else if (shmem_type == ShmemType::L2CACHE) {
-#ifdef OMPI_COMM_TYPE_L2CACHE
-          MPI_Comm_split_type(node_comm,
-                              OMPI_COMM_TYPE_L2CACHE,
-                              0,
-                              MPI_INFO_NULL,
-                              &shmem_comm);
-#else
           topo_type = HWLOC_OBJ_L2CACHE;
-          set_topo_type = true;
-#endif
         }
 
-        if (set_topo_type) {
+        int locality_id { -1 };
+
+        if (obj) {
           obj = hwloc_get_ancestor_obj_by_type(topology, topo_type, obj);
 
-          int locality_id = obj ? obj->logical_index : -1;
-
-          MPI_Comm_split(node_comm, locality_id, rank, &shmem_comm);
+          if (obj) {
+            locality_id = obj->logical_index;
+          }
         }
 
-        if (shmem_comm != MPI_COMM_NULL) {
-          shmem_comms.push_back(shmem_comm);
+        if (locality_id == -1) {
+          // Have to fallback to 0, to avoid an MPI_COMM_NULL
+          locality_id = 0;
         }
+
+        MPI_Comm_split(node_comm, locality_id, rank, &shmem_comm);
 
         hwloc_bitmap_free(cpuset);
         hwloc_topology_destroy(topology);
       } else {
         // ShmemType::MACHINE -- in this case shmem_comm == node_comm
         shmem_comm = node_comm;
+      }
+
+      if (shmem_comm == MPI_COMM_NULL) {
+        shmem_comm = node_comm;
+      } else if (shmem_comm != node_comm) {
+        shmem_comms.push_back(shmem_comm);
       }
 
       // Now, get the node local size and rank
