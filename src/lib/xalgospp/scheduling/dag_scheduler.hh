@@ -159,11 +159,11 @@ namespace xalgospp::scheduling {
    * 4. Using the resources and footprint, find the maximum number of steps that could
    *    be run concurrently.
    * 5. Based on Little's law determine the minimum number of steps to hide the latency
-   *    of the input generation. Currently this uses a fixed rate, hard coded. It could
-   *    be learned, as an improvement in future versions of the algorithm.
-   * 6. From 5, calculate a target number of steps to have in flight accounting for
-   *    system jitter.
-   * 7. From 6, determine the remaining concurrency numbers.
+   *    of the input generation. A profiling step is used after a few submissions to
+   *    get estimates of step latencies.
+   * 6. Calculate bandwidths from the total traffic and latencies.
+   * 7. From 5 and 6 calculate a limit based on memory bandiwdth.
+   * 8. From 7, determine the remaining concurrency numbers.
    */
   class DagScheduler {
   public:
@@ -200,11 +200,35 @@ namespace xalgospp::scheduling {
        * Raw frame size used for auto-tuning. Auto-determined if set to 0.
        */
       std::size_t raw_frame_size_bytes { 0 };
+      /**
+       * When autotuning, the number of DAG submissions used for warmup before timing.
+       */
+      std::size_t warmup_submissions { 5 };
+      /**
+       * The peak memory bandwidth, per NUMA node.
+       */
+      double node_memory_bandwidth_limit_gbps { 50.0 };
+      /**
+       * Percentage of total bandwidth usage to classify as "high memory" (memory-bound).
+       */
+      double percent_bandwidth_is_high_mem { 0.25 };
     };
 
     // NOTE: There seems to be a bug in both GCC and clang - Config{} will
     // not compile here. Seems related: https://gcc.gnu.org/bugzilla/show_bug.cgi?id=88165
-    explicit DagScheduler(Config cfg = Config { 0, 0, true, 2, 2, true, true, 0 });
+    explicit DagScheduler(Config cfg = Config {
+        /* num_num_nodes                    = */ 0,
+        /* threads_per_node                 = */ 0,
+        /* enable_pinning                   = */ true,
+        /* max_concurrent_high_mem          = */ 2,
+        /* max_concurrency_multiplier       = */ 2,
+        /* enable_dynamic_backpressure      = */ true,
+        /* enable_autotuning                = */ true,
+        /* raw_frame_size_bytes             = */ 0,
+        /* warmup_submissions               = */ 5,
+        /* node_memory_bandwidth_limit_gbps = */ 50.0,
+        /* percent_bandwidth_is_high_mem    = */ 0.25
+      });
     ~DagScheduler();
 
     /**
@@ -259,6 +283,14 @@ namespace xalgospp::scheduling {
     }
 
   private:
+    /**
+     * When autotuning, TaskProfileData is used for profiling job steps.
+     */
+    struct TaskProfileData {
+      std::atomic<std::size_t> count { 0 };
+      std::atomic<std::size_t> total_execution_time_ns { 0 };
+    };
+
     /**
      * Enter the main work queue.
      *
@@ -334,6 +366,8 @@ namespace xalgospp::scheduling {
      */
     void perform_autotune();
 
+    void record_task_metrics(std::shared_ptr<Task> task, std::uint64_t elapsed_ns);
+
     Config m_config;
     std::map<numa_node_t, std::vector<int>> m_topology;    ///< Mapping of node topology
     std::vector<std::thread> m_workers;                    ///< Complete set of workers
@@ -377,6 +411,13 @@ namespace xalgospp::scheduling {
 
     std::vector<MPI_Comm> m_shmem_comms;  ///< Any communicators used for Algorithms
     std::vector<RCWindow> m_algo_windows; ///< Backing windows for staged Algorithm data
+
+    // ---- Utilities for Autotuning and Task Profiling ---- //
+    std::atomic<std::size_t> m_submissions_count { 0 }; ///< Number of DAGs submitted
+    std::atomic<bool> m_profiling_phase { true };       ///< Whether currently profiling
+
+    TaskProfileData m_io_profile;      ///< Profile for IO-type Tasks
+    TaskProfileData m_compute_profile; ///< Profiel for compute/processing Tasks
 
     std::shared_ptr<spdlog::logger> m_logger;
   };

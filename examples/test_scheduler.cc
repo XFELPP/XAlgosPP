@@ -260,13 +260,17 @@ int main(int argc, char* argv[]) {
 
     // ---- Setup configuration for the scheduler ---- //
     xalgospp::scheduling::DagScheduler::Config scheduler_cfg {
-      /* num_numa_nodes              = */ 0,                // auto-detect
-      /* threads_per_node            = */ threads_per_node, // 0 would be auto-detect
-      /* enable_pinning              = */ true,
-      /* max_concurrent_high_mem     = */ max_concurrent_hm,
-      /* max_concurrency_multiplier  = */ 32,
-      /* enable_dynamic_backpressure = */ backpressure,
-      /* enable_autotuning           = */ autotune
+      /* num_numa_nodes                   = */ 0,                 // auto-detect
+      /* threads_per_node                 = */ threads_per_node,  // 0 would be auto-detect
+      /* enable_pinning                   = */ true,
+      /* max_concurrent_high_mem          = */ max_concurrent_hm,
+      /* max_concurrency_multiplier       = */ 32,
+      /* enable_dynamic_backpressure      = */ backpressure,
+      /* enable_autotuning                = */ autotune,
+      /* raw_frame_size_bytes             = */ 0,                 // auto-detect
+      /* warmup_submissions               = */ 10,
+      /* node_memory_bandwidth_limit_gbps = */ 50.0,
+      /* percent_bandwidth_is_high_mem    = */ 0.25
     };
 
     auto fetcher = [&det, print_interval](typename XTC2Traits::StepIdxType idx) {

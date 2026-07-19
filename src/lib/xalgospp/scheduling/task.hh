@@ -38,7 +38,11 @@ namespace xalgospp::scheduling {
    */
   struct ResourceRequirements {
     /**
-     * A scale form 1 (low) to 10 (staturated) of memory saturation.
+     * A memory usage footprint multiplier for calculating memory intensity.
+     *
+     * The value is an integer multiplier (best estimate) for the memory usage of
+     * this Task as a multiple of the input data size in bytes.
+     * E.g., a value of 8 requires memory use equal to 8x the input data size.
      */
     std::size_t memory_intensity { 1 };
     bool requires_gpu { false };        ///< Whether host/device bound.

@@ -315,39 +315,94 @@ namespace xalgospp::scheduling {
       return;
     }
 
-    // TODO: Get multipliers from the wrapped Tasks.
-    // TODO: Structure the time estimates somehow from teh wrapped Task...
-    //       Or learn it.
-    std::size_t mem_per_step { raw_frame_size * 3 }; // TODO: Get multiplier
+    double t_io { 0.002 };
+    double t_downstream { 0.010 };
+
+    std::size_t io_count { m_io_profile.count.load(std::memory_order_relaxed) };
+    if (io_count > 0) {
+      t_io =
+        static_cast<double>(m_io_profile.total_execution_time_ns.load(std::memory_order_relaxed)) / (io_count * 1e9);
+    }
+
+    std::size_t compute_count { m_compute_profile.count.load(std::memory_order_relaxed) };
+    if (compute_count > 0) {
+      t_downstream =
+        static_cast<double>(m_compute_profile.total_execution_time_ns.load(std::memory_order_relaxed)) / (compute_count * 1e9);
+    }
+
+    double avg_multiplier { 8.0 };
+    std::size_t mem_per_step { raw_frame_size * avg_multiplier };
     std::size_t max_steps_by_ram { (system_ram / 2) / mem_per_step };
 
     // Little's Law target: N_steps = Throughput * Latency
-    double t_io { 0.002 };           // 2ms  IO
-    double t_downstream { 0.010 };   // 10ms Downstream compute
     double ideal_throughput { total_workers / t_downstream };
     std::size_t min_steps {
       static_cast<std::size_t>(std::ceil(ideal_throughput * (t_io + t_downstream)))
     };
 
-    // Target steps in flight with a 2x jitter buffer
     std::size_t target_steps { std::min(min_steps * 2, max_steps_by_ram) };
     target_steps = std::max(target_steps, min_steps);
 
     std::size_t tasks_per_step { 3 };
     m_config.max_concurrency_multiplier =
       std::ceil(static_cast<double>(target_steps * tasks_per_step) / total_workers);
-
     m_config.max_concurrency_multiplier =
       std::max(std::size_t(4), m_config.max_concurrency_multiplier);
 
-    m_config.max_concurrent_high_mem = std::max(std::size_t(1), m_workers.size() / 4);
+    // Bandwidth limit calculation uses bytes accessed as (1 * read + multiplier * written)
+    double task_traffic_gb {
+      static_cast<double>(raw_frame_size * (1.0 + avg_multiplier)) / 1e9
+    };
+    double task_bandwidth_gbps { task_traffic_gb / t_downstream };
+
+    double node_bandwidth_limit {
+      m_config.node_memory_bandwidth_limit_gbps / local_size
+    };
+    double max_concurrent_tasks_by_bandwidth {
+      node_bandwidth_limit / task_bandwidth_gbps
+    };
+
+    std::size_t threads_per_node { m_config.threads_per_node };
+    if (threads_per_node == 0 && !m_topology.empty()) {
+      threads_per_node = m_topology.begin()->second.size();
+    }
+    threads_per_node = std::max(std::size_t(1), threads_per_node);
+
+    m_config.max_concurrent_high_mem =
+      std::min(threads_per_node,
+               std::max(std::size_t(1),
+                        static_cast<std::size_t>(std::floor(max_concurrent_tasks_by_bandwidth))));
+
+    m_logger->info("[Autotuner] Learned stats: T_io = {:.3f} ms, T_downstream = {:.3f} ms, Task "
+                   "Bandwidth = {:.2f} GB/s",
+                   t_io * 1000.0,
+                   t_downstream * 1000.0,
+                   task_bandwidth_gbps);
     m_logger->info("[Autotuner] Tuned max_concurrency_multiplier to {} (Target steps in flight: {})",
                    m_config.max_concurrency_multiplier,
                    target_steps);
-    m_logger->info("[Autotuner] Tuned max_concurrent_high_mem to {}",
-                   m_config.max_concurrent_high_mem);
-
+    m_logger->info("[Autotuner] Tuned max_concurrent_high_mem to {} (Node limit: {} GB/s, "
+                   "Concurrent by bandwidth: {:.2f})",
+                   m_config.max_concurrent_high_mem,
+                   node_bandwidth_limit,
+                   max_concurrent_tasks_by_bandwidth);
     m_config.enable_autotuning = false;
+  }
+
+  void DagScheduler::record_task_metrics(std::shared_ptr<Task> task,
+                                         std::uint64_t elapsed_ns) {
+    if (task->is_generator()) {
+      // IO/Generators aren't profiled for processing time
+      return;
+    }
+
+    if (task->resources().memory_intensity <= 2) {
+      m_io_profile.count.fetch_add(1, std::memory_order_relaxed);
+      m_io_profile.total_execution_time_ns.fetch_add(elapsed_ns, std::memory_order_relaxed);
+    } else {
+      m_compute_profile.count.fetch_add(1, std::memory_order_relaxed);
+      m_compute_profile.total_execution_time_ns.fetch_add(elapsed_ns, std::memory_order_relaxed);
+    }
   }
 
   numa_node_t DagScheduler::resolve_locality(const LocalityHint& hint) {
@@ -388,15 +443,34 @@ namespace xalgospp::scheduling {
   void DagScheduler::submit_dag(std::vector<std::shared_ptr<Task>> tasks) {
     m_unfinished_tasks.fetch_add(tasks.size(), std::memory_order_release);
 
-    if (m_config.enable_autotuning) {
-      bool initialized_pools { false };
-      {
-        std::lock_guard<std::mutex> lock(m_pool_mutex);
-        initialized_pools = !m_pools.empty();
+    if (m_config.enable_autotuning && m_profiling_phase.load(std::memory_order_acquire)) {
+      bool has_compute_tasks { false };
+      for (const auto& task : tasks) {
+        if (!task->is_generator() && task->resources().memory_intensity > 2) {
+          has_compute_tasks = true;
+          break;
+        }
       }
 
-      if (initialized_pools) {
-        perform_autotune();
+      if (has_compute_tasks) {
+        std::size_t current_submission {
+          m_submissions_count.fetch_add(1, std::memory_order_relaxed) + 1
+        };
+
+        if (current_submission == m_config.warmup_submissions) {
+          auto profile = [this]() {
+            while (m_compute_profile.count.load(std::memory_order_acquire) < m_config.warmup_submissions) {
+              std::this_thread::sleep_for(std::chrono::milliseconds(5));
+            }
+
+            perform_autotune();
+
+            // After this will just submit like normal
+            m_profiling_phase.store(false, std::memory_order_release);
+          };
+
+          std::thread(profile).detach();
+        }
       }
     }
 
@@ -527,9 +601,31 @@ namespace xalgospp::scheduling {
       }
 
       if (task) {
-        // Currently, set an arbitrary threshold of 8 for mem-bound throttling.
-        bool is_high_mem { task->resources().memory_intensity >= 8 };
+
+        bool is_high_mem { false };
         bool acquired_token { false };
+
+        if (!m_profiling_phase && m_config.raw_frame_size_bytes > 0) {
+          double task_mem_gb =
+            static_cast<double>(m_config.raw_frame_size_bytes * (1 + task->resources().memory_intensity)) / 1e9;
+          double avg_time_s { 0.010 }; // Hard-coded fallback
+
+          std::size_t count { m_compute_profile.count.load(std::memory_order_relaxed) };
+          if (count > 0) {
+            avg_time_s =
+              static_cast<double>(m_compute_profile.total_execution_time_ns.load(std::memory_order_relaxed)) / (count * 1e9);
+          }
+          double task_bandwidth { task_mem_gb / avg_time_s };
+
+          is_high_mem = (task_bandwidth > m_config.node_memory_bandwidth_limit_gbps * m_config.percent_bandwidth_is_high_mem);
+        } else {
+          // Fallback by setting an arbitrary threshold of 8 for mem-bound throttling.
+          is_high_mem = (task->resources().memory_intensity >= 8);
+        }
+
+        // Currently, set an arbitrary threshold of 8 for mem-bound throttling.
+        // bool is_high_mem { task->resources().memory_intensity >= 8 };
+        // bool acquired_token { false };
 
         if (is_high_mem) {
           std::size_t current_high_mem { m_active_high_mem_tasks.load(std::memory_order_acquire) };
@@ -560,7 +656,8 @@ namespace xalgospp::scheduling {
           }
         }
 
-        // Execute task
+        // Execute task (include timing)
+        auto start_time { std::chrono::high_resolution_clock::now() };
         try {
           // m_logger->trace("Worker {} executing task.", home_node);
           task->execute();
@@ -571,6 +668,14 @@ namespace xalgospp::scheduling {
         } catch (...) {
           m_logger->error("[Worker Thread {}] Task failed with unknown exception!",
                           thread_id);
+        }
+        auto end_time { std::chrono::high_resolution_clock::now() };
+        auto elapsed_ns {
+          std::chrono::duration_cast<std::chrono::nanoseconds>(end_time - start_time).count()
+        };
+
+        if (m_profiling_phase) {
+          record_task_metrics(task, elapsed_ns);
         }
 
         if (acquired_token) {
