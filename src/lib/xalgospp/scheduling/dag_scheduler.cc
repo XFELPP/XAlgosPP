@@ -32,6 +32,7 @@
 #include <filesystem>
 #include <fstream>
 #include <mutex>
+#include <random>
 #include <sstream>
 #include <string>
 #include <thread>
@@ -155,15 +156,27 @@ namespace xalgospp::scheduling {
       }
     }
 
-    // After tearing down queues, cleanup any Algorithm data we prepared
-    m_algo_windows.clear();
-    for (auto& comm : m_shmem_comms) {
-      if (comm != MPI_COMM_NULL) {
-        MPI_Comm_free(&comm);
-        comm = MPI_COMM_NULL;
+    m_suspended_generators.clear();
+    m_pools.clear();
+
+    int mpi_initialized { 0 };
+    MPI_Initialized(&mpi_initialized);
+
+    if (mpi_initialized) {
+      // After tearing down queues, cleanup any Algorithm data we prepared
+      if (m_world_comm != MPI_COMM_NULL) {
+        MPI_Barrier(m_world_comm);
       }
+
+      m_algo_windows.clear();
+      for (auto& comm : m_shmem_comms) {
+        if (comm != MPI_COMM_NULL) {
+          MPI_Comm_free(&comm);
+          comm = MPI_COMM_NULL;
+        }
+      }
+      m_shmem_comms.clear();
     }
-    m_shmem_comms.clear();
   }
 
   bool DagScheduler::pin_thread_to_cores(const std::vector<int>& core_ids) {
@@ -331,7 +344,7 @@ namespace xalgospp::scheduling {
     }
 
     double avg_multiplier { 8.0 };
-    std::size_t mem_per_step { raw_frame_size * avg_multiplier };
+    std::size_t mem_per_step { static_cast<std::size_t>(raw_frame_size * avg_multiplier) };
     std::size_t max_steps_by_ram { (system_ram / 2) / mem_per_step };
 
     // Little's Law target: N_steps = Throughput * Latency
@@ -487,7 +500,6 @@ namespace xalgospp::scheduling {
 
     if (m_config.enable_dynamic_backpressure && task->is_generator()) {
       std::lock_guard<std::mutex> lock(m_suspension_mutex);
-
       if (should_throttle_generators()) {
         m_suspended_generators.push_back(std::move(task));
         m_num_suspended_generators.fetch_add(1, std::memory_order_release);
@@ -514,11 +526,29 @@ namespace xalgospp::scheduling {
   void DagScheduler::wait_all() {
     std::unique_lock<std::mutex> lock(m_wait_mutex);
 
-    auto wait_on_work = [this] () {
-      return m_unfinished_tasks.load(std::memory_order_acquire) == 0;
+    auto wait_on_work = [this]() {
+      if (m_unfinished_tasks.load(std::memory_order_acquire) != 0) {
+        return false;
+      }
+      if (m_num_suspended_generators.load(std::memory_order_acquire) != 0) {
+        return false;
+      }
+      if (!m_global_queue.empty()) {
+        return false;
+      }
+      for (const auto& q : m_node_queues) {
+        if (!q->empty()) {
+          return false;
+        }
+      }
+      return true;
     };
 
     m_wait_cv.wait(lock, wait_on_work);
+
+    if (m_world_comm != MPI_COMM_NULL) {
+      MPI_Barrier(m_world_comm);
+    }
   }
 
   void DagScheduler::on_task_complete(std::shared_ptr<Task> completed_task) {
@@ -534,27 +564,35 @@ namespace xalgospp::scheduling {
     completed_task->m_children.clear();
     completed_task.reset();
 
-    std::size_t remaining {
-      m_unfinished_tasks.fetch_sub(1, std::memory_order_acq_rel) - 1
-    };
-
-    if (remaining == 0) {
-      std::lock_guard<std::mutex> lock(m_wait_mutex);
-      m_wait_cv.notify_all();
-    }
+    // NOTE: Must perform the decrement on the Task count before making throttling
+    //       decision, since this Task is currently completing. Otherwise, things
+    //       exit early/will hang if Barriers have been introduced in some places.
+    m_unfinished_tasks.fetch_sub(1, std::memory_order_acq_rel);
 
     std::vector<std::shared_ptr<Task>> to_resume;
-    if (m_num_suspended_generators.load(std::memory_order_acquire) > 0) {
-      std::lock_guard<std::mutex> lock(m_suspension_mutex);
-      if (!should_throttle_generators() && !m_suspended_generators.empty()) {
-        to_resume = std::move(m_suspended_generators);
-        m_suspended_generators.clear();
-        m_num_suspended_generators.store(0, std::memory_order_release);
+    {
+      if (!m_suspended_generators.empty()) {
+        std::size_t unfinished { m_unfinished_tasks.load(std::memory_order_acquire) };
+        std::size_t suspended { m_num_suspended_generators.load(std::memory_order_acquire) };
+
+        if (!should_throttle_generators() || unfinished <= suspended) {
+          to_resume = std::move(m_suspended_generators);
+          m_suspended_generators.clear();
+          m_num_suspended_generators.store(0, std::memory_order_release);
+        }
       }
     }
 
     for (auto& gen_task : to_resume) {
       enqueue(std::move(gen_task));
+    }
+
+    // Careful with underflows since these are not signed
+    if (m_unfinished_tasks.load(std::memory_order_acquire) == 0         &&
+        m_num_suspended_generators.load(std::memory_order_acquire) == 0 &&
+        m_global_queue.empty()) {
+      std::lock_guard<std::mutex> lock(m_wait_mutex);
+      m_wait_cv.notify_all();
     }
   }
 
@@ -565,6 +603,10 @@ namespace xalgospp::scheduling {
       auto it { m_topology.find(home_node) };
 
       if (it != m_topology.end()) {
+        m_logger->debug("[Thread {}][Posix Thread ID: {}][NUMA Node {}] Pinning this to core.",
+                        thread_id,
+                        std::hash<std::thread::id>{}(std::this_thread::get_id()),
+                        home_node);
         pin_thread_to_cores(it->second);
       }
     }
@@ -708,6 +750,14 @@ namespace xalgospp::scheduling {
         m_job_cv.wait(lock, wait_for_work);
       }
     }
+
+    m_logger->debug("[Thread {}][Posix Thread ID: {}][NUMA Node {}] Exiting worker loop. Unfinished tasks = {}, "
+                    "Suspended Generators = {}",
+                    thread_id,
+                    std::hash<std::thread::id>{}(std::this_thread::get_id()),
+                    home_node,
+                    m_unfinished_tasks.load(),
+                    m_num_suspended_generators.load());
   }
 
   std::shared_ptr<ncarray::NCArray> DagScheduler::acquire_buffer(numa_node_t node,
@@ -730,5 +780,108 @@ namespace xalgospp::scheduling {
     }
 
     return pool->acquire();
+  }
+
+  void DagScheduler::check_memory_bandwidth(std::size_t test_bytes, std::size_t niter) {
+    // Setup buffers
+    std::size_t nelem { test_bytes / sizeof(double) };
+
+    double* array_a { new double[nelem] };
+    double* array_b { new double[nelem] };
+    double* array_c { new double[nelem] };
+
+    std::random_device rand_dev;
+    std::mt19937 rng(rand_dev());
+    std::uniform_real_distribution<> rand_dist(-1024.0, 1024.0);
+    for (std::size_t i = 0; i < nelem; ++i) {
+      array_a[i] = rand_dist(rng);
+      array_b[i] = rand_dist(rng);
+      array_c[i] = rand_dist(rng);
+    }
+
+    double scalar_1 { rand_dist(rng) };
+    double scalar_2 { rand_dist(rng) };
+
+    double copy_ns { 0.0 };
+    double multiply_ns { 0.0 };
+    double add_ns { 0.0 };
+    double multiply_add_ns { 0.0 };
+
+    for (std::size_t n = 0; n < niter; ++n) {
+      // Run copy test
+      auto copy_start { std::chrono::high_resolution_clock::now() };
+      for (std::size_t i = 0; i < nelem; ++i) {
+        array_c[i] = array_a[i];
+      }
+      auto copy_end { std::chrono::high_resolution_clock::now() };
+
+      copy_ns +=
+        std::chrono::duration_cast<std::chrono::nanoseconds>(copy_end - copy_start).count();
+
+      // Run scalar multiplier
+      auto multiply_start { std::chrono::high_resolution_clock::now() };
+      for (std::size_t i = 0; i < nelem; ++i) {
+        array_b[i] = scalar_1 * array_c[i];
+      }
+      auto multiply_end { std::chrono::high_resolution_clock::now() };
+
+      multiply_ns +=
+        std::chrono::duration_cast<std::chrono::nanoseconds>(multiply_end - multiply_start).count();
+
+      // Run array addition
+      auto add_start { std::chrono::high_resolution_clock::now() };
+      for (std::size_t i = 0; i < nelem; ++i) {
+        array_c[i] = array_a[i] + array_b[i];
+      }
+      auto add_end { std::chrono::high_resolution_clock::now() };
+
+      add_ns +=
+          std::chrono::duration_cast<std::chrono::nanoseconds>(add_end - add_start).count();
+
+      // Run multiply add
+      auto multiply_add_start { std::chrono::high_resolution_clock::now() };
+      for (std::size_t i = 0; i < nelem; ++i) {
+        array_a[i] = scalar_2 * array_c[i] + array_b[i];
+      }
+      auto multiply_add_end { std::chrono::high_resolution_clock::now() };
+
+      multiply_add_ns +=
+          std::chrono::duration_cast<std::chrono::nanoseconds>(multiply_add_end - multiply_add_start).count();
+    }
+
+    double copy_gbps {
+      (static_cast<double>(test_bytes) / 1e9) / ((copy_ns / niter) / 1e9)
+    };
+
+    double multiply_gbps {
+      (static_cast<double>(test_bytes) / 1e9) / ((multiply_ns / niter) / 1e9)
+    };
+
+    double add_gbps {
+      (static_cast<double>(test_bytes) / 1e9) / ((add_ns / niter) / 1e9)
+    };
+
+    double multiply_add_gbps {
+      (static_cast<double>(test_bytes) / 1e9) / ((multiply_add_ns / niter) / 1e9)
+    };
+
+    m_logger->info("[Autotuner] Memory bandwidth results show: Copy = {} GB/s, "
+                   "Scalar Multiply = {} GB/s, "
+                   "Array Add = {} GB/s, "
+                   "Array Multiply Add = {} GB/s",
+                   copy_gbps,
+                   multiply_gbps,
+                   add_gbps,
+                   multiply_add_gbps);
+
+    m_config.node_memory_bandwidth_limit_gbps =
+      (copy_gbps + multiply_gbps + add_gbps + multiply_add_gbps) / 4;
+
+    m_logger->info("[Autotuner] Set bandwidth limit to average ({} GB/s)",
+                   m_config.node_memory_bandwidth_limit_gbps);
+
+    delete[] array_a;
+    delete[] array_b;
+    delete[] array_c;
   }
 } // namespace xalgospp::scheduling

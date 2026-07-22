@@ -251,10 +251,42 @@ namespace xalgospp::scheduling {
      */
     void wait_all();
 
+    /**
+     * Retrieve an array buffer of the requested size from the buffer pool.
+     *
+     * @param[in] node The NUMA node for the buffer pool.
+     * @param[in] ndim The dimensions for the requested array.
+     * @param[in] shape The shape for the requested array.
+     * @param[in] dtype The datatype for the requested array.
+     * @returns A shared pointer to the array in the pool.
+     */
     std::shared_ptr<ncarray::NCArray> acquire_buffer(numa_node_t node,
                                                      ssize_t ndim,
                                                      const ssize_t* shape,
                                                      ncarray::DType dtype);
+
+    /**
+     * Run a test timing routine for estimation of memory bandwidth.
+     *
+     * This routine will estimate the total bandwidth using test cases of a copy,
+     * scalar multiplier (buffer * scalar), addition of two buffers, and a multiply
+     * add routine. The input test buffer size should be of the order ~4-5x the total
+     * cache memory size. After that point, additionally increases in the size wont
+     * affect the measurement much, but will increase the total memory footprint.
+     *
+     * @note Currently, this is a very simple function, and it is not thread-safe.
+     *       It should be called from the main thread only. In the future it will
+     *       be improved to account for multi-thread behaviour. In the meantime,
+     *       the best measurements will be collected when run from an isolated
+     *       NUMA domain (I.e., the process is the only one on the domain).
+     *
+     * @param[in] test_bytes The size in bytes of the array buffer to use. Should be
+     *            on the order of 4-5x the cache size (L3 cache).
+     * @param[in] niter The number of iterations to use. The timings will be taken from
+     *            the average across iterations.
+     */
+    void check_memory_bandwidth(std::size_t test_bytes = 32ULL * 1024 * 1024,
+                                std::size_t niter = 10);
 
     /**
      * Setup an Algorithm using a shared-memory MPI strategy.

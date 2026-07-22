@@ -32,6 +32,7 @@
 #include <hwloc.h>
 #include <mpi.h>
 #include <spdlog/sinks/stdout_color_sinks.h>
+#include <spdlog/spdlog.h>
 
 #ifdef _WIN32
 #include <BaseTsd.h>
@@ -164,7 +165,7 @@ namespace xalgospp::scheduling {
         bool set_topo_type { false };
 
         if (shmem_type == ShmemType::SOCKET) {
-        topo_type = HWLOC_OBJ_PACKAGE;
+          topo_type = HWLOC_OBJ_PACKAGE;
         } else if (shmem_type == ShmemType::NUMA) {
           topo_type = HWLOC_OBJ_NUMANODE;
         } else if (shmem_type == ShmemType::L3CACHE) {
@@ -186,6 +187,44 @@ namespace xalgospp::scheduling {
         if (locality_id == -1) {
           // Have to fallback to 0, to avoid an MPI_COMM_NULL
           locality_id = 0;
+
+          std::string logger_name { "XAlgosPP::Scheduling::Staging" };
+          logger_name += "::Rank" + std::to_string(rank);
+
+          auto logger = spdlog::get(logger_name);
+          if (!logger) {
+            logger = spdlog::stdout_color_mt(logger_name);
+          }
+
+          std::string shmem_type_str;
+          switch (shmem_type) {
+          case ShmemType::MACHINE: {
+            // This should always be supported... if not, bigger problems.
+            // Just include the case for the switch
+            shmem_type_str = "ShmemType::MACHINE";
+            break;
+          }
+          case ShmemType::SOCKET: {
+            shmem_type_str = "ShmemType::SOCKET";
+            break;
+          }
+          case ShmemType::NUMA: {
+            shmem_type_str = "ShmemType::NUMA";
+            break;
+          }
+          case ShmemType::L3CACHE: {
+            shmem_type_str = "ShmemType::L3CACHE";
+            break;
+          }
+          case ShmemType::L2CACHE: {
+            shmem_type_str = "ShmemType::L2CACHE";
+            break;
+          }
+          }
+
+          logger->warn("Requested SHMEM split type ({}) was not supported. "
+                       "Will fallback to using ShmemType::MACHINE.",
+                       shmem_type_str);
         }
 
         MPI_Comm_split(node_comm, locality_id, rank, &shmem_comm);
