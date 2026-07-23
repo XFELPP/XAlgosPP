@@ -117,11 +117,13 @@ namespace xalgospp::scheduling {
     }
     std::size_t num_queues { m_topology.empty() ? 0 : (max_node_id + 1) };
 
+    m_logger->info("Creating {} NUMA-node specific queues.", num_queues);
     for (std::size_t i = 0; i < num_queues; ++i) {
-      m_logger->info("Creating queue for NUMA node {}.", i);
+      m_logger->debug("Creating queue for NUMA node {}.", i);
       m_node_queues.push_back(std::make_unique<WorkQueue>());
     }
 
+    m_logger->info("Launching workers for each queue.");
     // Launch worker threads
     std::size_t thread_id { 0 };
     for (const auto& [node_id, cores] : m_topology) {
@@ -130,8 +132,9 @@ namespace xalgospp::scheduling {
         threads_on_node = cores.size();
       }
 
+      m_logger->debug("Launching {} workers on node {}.", threads_on_node, node_id);
       for (std::size_t t = 0; t < threads_on_node; ++t) {
-        m_logger->info("Launching worker {} on node {}.", thread_id, node_id);
+        m_logger->trace("Launching worker {} on node {}.", thread_id, node_id);
         m_workers.emplace_back(&DagScheduler::worker_loop, this, thread_id++, node_id);
       }
     }
@@ -794,105 +797,139 @@ namespace xalgospp::scheduling {
   }
 
   void DagScheduler::check_memory_bandwidth(std::size_t test_bytes, std::size_t niter) {
-    // Setup buffers
-    std::size_t nelem { test_bytes / sizeof(double) };
+    std::size_t num_threads { 0 };
+    if (m_workers.empty()) {
+      num_threads = std::thread::hardware_concurrency();
+    } else {
+      num_threads = m_workers.size();
+    }
+    num_threads = std::max(std::size_t(1), num_threads);
 
-    double* array_a { new double[nelem] };
-    double* array_b { new double[nelem] };
-    double* array_c { new double[nelem] };
+    std::size_t bytes_per_thread { test_bytes / num_threads };
+    std::size_t nelem_per_thread { bytes_per_thread / sizeof(double) };
 
-    std::random_device rand_dev;
-    std::mt19937 rng(rand_dev());
-    std::uniform_real_distribution<> rand_dist(-1024.0, 1024.0);
-    for (std::size_t i = 0; i < nelem; ++i) {
-      array_a[i] = rand_dist(rng);
-      array_b[i] = rand_dist(rng);
-      array_c[i] = rand_dist(rng);
+    std::vector<double> copy_gbps_vec(num_threads, 0.0);
+    std::vector<double> multiply_gbps_vec(num_threads, 0.0);
+    std::vector<double> add_gbps_vec(num_threads, 0.0);
+    std::vector<double> multiply_add_gbps_vec(num_threads, 0.0);
+
+    // Run a basic STREAM test (can find info on this online easily)
+    auto benchmark_worker = [&](std::size_t tid) {
+      std::size_t nelem { nelem_per_thread };
+
+      std::vector<double> vec_a(nelem);
+      std::vector<double> vec_b(nelem);
+      std::vector<double> vec_c(nelem);
+
+      std::random_device rand_dev;
+      std::mt19937 rng(rand_dev());
+      std::uniform_real_distribution<> rand_dist(-1024.0, 1024.0);
+
+      for (std::size_t i = 0; i < nelem; ++i) {
+        vec_a[i] = rand_dist(rng);
+        vec_b[i] = rand_dist(rng);
+        vec_c[i] = rand_dist(rng);
+      }
+
+      double scalar_1 { rand_dist(rng) };
+      double scalar_2 { rand_dist(rng) };
+
+      double copy_ns { 0.0 };
+      double multiply_ns { 0.0 };
+      double add_ns { 0.0 };
+      double multiply_add_ns { 0.0 };
+
+      for (std::size_t n = 0; n < niter; ++n) {
+        // Run copy test - total traffic = 2 x bytes
+        auto copy_start { std::chrono::high_resolution_clock::now() };
+        for (std::size_t i = 0; i < nelem; ++i) {
+          vec_c[i] = vec_a[i];
+        }
+        auto copy_end { std::chrono::high_resolution_clock::now() };
+
+        copy_ns +=
+          std::chrono::duration_cast<std::chrono::nanoseconds>(copy_end - copy_start).count();
+
+        // Run scalar multiplier - total traffic = 2 x bytes
+        auto multiply_start { std::chrono::high_resolution_clock::now() };
+        for (std::size_t i = 0; i < nelem; ++i) {
+          vec_b[i] = scalar_1 * vec_c[i];
+        }
+        auto multiply_end { std::chrono::high_resolution_clock::now() };
+
+        multiply_ns +=
+          std::chrono::duration_cast<std::chrono::nanoseconds>(multiply_end - multiply_start).count();
+
+        // Run array addition - total traffic = 3 x bytes
+        auto add_start { std::chrono::high_resolution_clock::now() };
+        for (std::size_t i = 0; i < nelem; ++i) {
+          vec_c[i] = vec_a[i] + vec_b[i];
+        }
+        auto add_end { std::chrono::high_resolution_clock::now() };
+
+        add_ns +=
+            std::chrono::duration_cast<std::chrono::nanoseconds>(add_end - add_start).count();
+
+        // Run multiply add - total traffic = 3 x bytes (often called `triad`)
+        auto multiply_add_start { std::chrono::high_resolution_clock::now() };
+        for (std::size_t i = 0; i < nelem; ++i) {
+          vec_a[i] = scalar_2 * vec_c[i] + vec_b[i];
+        }
+        auto multiply_add_end { std::chrono::high_resolution_clock::now() };
+
+        multiply_add_ns +=
+            std::chrono::duration_cast<std::chrono::nanoseconds>(multiply_add_end - multiply_add_start).count();
+      }
+
+      double thread_bytes { static_cast<double>(nelem * sizeof(double)) };
+      copy_gbps_vec[tid] = (2.0 * thread_bytes / 1e9) / ((copy_ns / niter) / 1e9);
+      multiply_gbps_vec[tid] = (2.0 * thread_bytes / 1e9) / ((multiply_ns / niter) / 1e9);
+      add_gbps_vec[tid] = (2.0 * thread_bytes / 1e9) / ((add_ns / niter) / 1e9);
+      multiply_add_gbps_vec[tid] = (2.0 * thread_bytes / 1e9) / ((multiply_add_ns / niter) / 1e9);
+    };
+
+    std::vector<std::thread> threads;
+    threads.reserve(num_threads);
+
+    for (std::size_t t = 0; t < num_threads; ++t) {
+      threads.emplace_back(benchmark_worker, t);
     }
 
-    double scalar_1 { rand_dist(rng) };
-    double scalar_2 { rand_dist(rng) };
-
-    double copy_ns { 0.0 };
-    double multiply_ns { 0.0 };
-    double add_ns { 0.0 };
-    double multiply_add_ns { 0.0 };
-
-    for (std::size_t n = 0; n < niter; ++n) {
-      // Run copy test
-      auto copy_start { std::chrono::high_resolution_clock::now() };
-      for (std::size_t i = 0; i < nelem; ++i) {
-        array_c[i] = array_a[i];
+    for (auto& t : threads) {
+      if (t.joinable()) {
+        t.join();
       }
-      auto copy_end { std::chrono::high_resolution_clock::now() };
-
-      copy_ns +=
-        std::chrono::duration_cast<std::chrono::nanoseconds>(copy_end - copy_start).count();
-
-      // Run scalar multiplier
-      auto multiply_start { std::chrono::high_resolution_clock::now() };
-      for (std::size_t i = 0; i < nelem; ++i) {
-        array_b[i] = scalar_1 * array_c[i];
-      }
-      auto multiply_end { std::chrono::high_resolution_clock::now() };
-
-      multiply_ns +=
-        std::chrono::duration_cast<std::chrono::nanoseconds>(multiply_end - multiply_start).count();
-
-      // Run array addition
-      auto add_start { std::chrono::high_resolution_clock::now() };
-      for (std::size_t i = 0; i < nelem; ++i) {
-        array_c[i] = array_a[i] + array_b[i];
-      }
-      auto add_end { std::chrono::high_resolution_clock::now() };
-
-      add_ns +=
-          std::chrono::duration_cast<std::chrono::nanoseconds>(add_end - add_start).count();
-
-      // Run multiply add
-      auto multiply_add_start { std::chrono::high_resolution_clock::now() };
-      for (std::size_t i = 0; i < nelem; ++i) {
-        array_a[i] = scalar_2 * array_c[i] + array_b[i];
-      }
-      auto multiply_add_end { std::chrono::high_resolution_clock::now() };
-
-      multiply_add_ns +=
-          std::chrono::duration_cast<std::chrono::nanoseconds>(multiply_add_end - multiply_add_start).count();
     }
 
-    double copy_gbps {
-      (static_cast<double>(test_bytes) / 1e9) / ((copy_ns / niter) / 1e9)
-    };
+    double total_copy_gbps { 0.0 };
+    double total_multiply_gbps { 0.0 };
+    double total_add_gbps { 0.0 };
+    double total_multiply_add_gbps { 0.0 };
+    for (std::size_t t = 0; t < num_threads; ++t) {
+      total_copy_gbps += copy_gbps_vec[t];
+      total_multiply_gbps += multiply_gbps_vec[t];
+      total_add_gbps += add_gbps_vec[t];
+      total_multiply_add_gbps += multiply_add_gbps_vec[t];
+    }
 
-    double multiply_gbps {
-      (static_cast<double>(test_bytes) / 1e9) / ((multiply_ns / niter) / 1e9)
-    };
+    m_logger->info("[Autotuner] Memory bandwidth results from STREAM test, "
+                   "with {} threads, show: "
+                   "Copy = {:.2f} GB/s, "
+                   "Scalar Multiply = {:.2f} GB/s, "
+                   "Array Add = {:.2f} GB/s, "
+                   "Array Multiply Add ('triad') = {:.2f} GB/s",
+                   num_threads,
+                   total_copy_gbps,
+                   total_multiply_gbps,
+                   total_add_gbps,
+                   total_multiply_add_gbps);
 
-    double add_gbps {
-      (static_cast<double>(test_bytes) / 1e9) / ((add_ns / niter) / 1e9)
-    };
+    double avg_node_gbps =
+      (total_copy_gbps + total_multiply_gbps + total_add_gbps + total_multiply_add_gbps) / 4;
 
-    double multiply_add_gbps {
-      (static_cast<double>(test_bytes) / 1e9) / ((multiply_add_ns / niter) / 1e9)
-    };
+    m_config.node_memory_bandwidth_limit_gbps = avg_node_gbps;
 
-    m_logger->info("[Autotuner] Memory bandwidth results show: Copy = {} GB/s, "
-                   "Scalar Multiply = {} GB/s, "
-                   "Array Add = {} GB/s, "
-                   "Array Multiply Add = {} GB/s",
-                   copy_gbps,
-                   multiply_gbps,
-                   add_gbps,
-                   multiply_add_gbps);
-
-    m_config.node_memory_bandwidth_limit_gbps =
-      (copy_gbps + multiply_gbps + add_gbps + multiply_add_gbps) / 4;
-
-    m_logger->info("[Autotuner] Set bandwidth limit to average ({} GB/s)",
-                   m_config.node_memory_bandwidth_limit_gbps);
-
-    delete[] array_a;
-    delete[] array_b;
-    delete[] array_c;
+    m_logger->info("[Autotuner] Set bandwidth limit to average ({:.2f} GB/s)",
+                   avg_node_gbps);
   }
 } // namespace xalgospp::scheduling

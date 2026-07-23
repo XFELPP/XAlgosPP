@@ -43,9 +43,11 @@ typedef SSIZE_T ssize_t;
 
 #include <cstdint>
 #include <cstring>
+#include <string>
 
 namespace xalgospp::scheduling {
   /**
+   * @file
    * The staging routines provide a variety of strategies for preparation of any
    * Algorithm ("staged") data. The set creates a toolkit of drop-in coordination
    * mechanisms to distribute "staged" data across parallel instances of the
@@ -61,7 +63,7 @@ namespace xalgospp::scheduling {
   using RCWindow = sbio::RC<MPI_Win, sbio::MPIWinAllocator, sbio::MPIWinDeleter>;
 
   /**
-   * Enumerators to indicate the specificity of shared memory to use.
+   * @brief Enumerators to indicate the specificity of shared memory to use.
    *
    * When creating shared-memory partitions, the allocation can be created to
    * be shared at varying levels of specificity and inclusion. At the top, the
@@ -70,6 +72,7 @@ namespace xalgospp::scheduling {
    * domain.
    */
   enum class ShmemType : std::uint8_t {
+    // WORLD = 0,   ///< The whole MPI world (may span multiple machines)
     MACHINE = 0, ///< Whole node/machine shared memory
     SOCKET= 1,   ///< By hardware socket
     NUMA = 2,    ///< By NUMA domain
@@ -78,7 +81,7 @@ namespace xalgospp::scheduling {
   };
 
   /**
-   * Setup an Algorithm using a shared-memory MPI strategy.
+   * @brief Setup an Algorithm using a shared-memory MPI strategy.
    *
    * Algorithms which require some staged data (e.g. constant matrices) can be
    * setup to use various MPI shared communication strategies. Doing so, however,
@@ -119,8 +122,19 @@ namespace xalgospp::scheduling {
     MPI_Comm_rank(main_comm, &rank);
     MPI_Comm_size(main_comm, &size);
 
+    std::string logger_name { "XAlgosPP::Scheduling::Staging" };
+    if (rank >= 0) {
+      logger_name += "::Rank" + std::to_string(rank);
+    }
+
+    auto logger = spdlog::get(logger_name);
+    if (!logger) {
+      logger = spdlog::stdout_color_mt(logger_name);
+    }
+
     if (rank < 0 || size < 0) {
       // Something went wrong...
+      logger->warn("MPI rank and size retrieval failed! Will stage on each process!");
       algo.stage();
       return;
     } else {
@@ -137,6 +151,7 @@ namespace xalgospp::scheduling {
 
       if (node_comm == MPI_COMM_NULL) {
         // Something went wrong....
+        logger->warn("Node Communicator creation failed! Will stage on each process!");
         algo.stage();
         return;
       }
@@ -187,14 +202,6 @@ namespace xalgospp::scheduling {
         if (locality_id == -1) {
           // Have to fallback to 0, to avoid an MPI_COMM_NULL
           locality_id = 0;
-
-          std::string logger_name { "XAlgosPP::Scheduling::Staging" };
-          logger_name += "::Rank" + std::to_string(rank);
-
-          auto logger = spdlog::get(logger_name);
-          if (!logger) {
-            logger = spdlog::stdout_color_mt(logger_name);
-          }
 
           std::string shmem_type_str;
           switch (shmem_type) {
@@ -255,18 +262,33 @@ namespace xalgospp::scheduling {
         return;
       }
 
-      // Node rank 0 stages, then we redistribute info.
+      // Setup a communicator for just the leaders (rank 0) down to the requested
+      // shmem granularity level -- will only stage once, and distribute using this
+      // comm.
+      MPI_Comm leaders_comm { MPI_COMM_NULL };
+      bool is_leader { shmem_rank == 0 };
+      MPI_Comm_split(main_comm, is_leader ? 0 : MPI_UNDEFINED, rank, &leaders_comm);
+
       std::size_t bytes_for_algo { 0 };
-      if (shmem_rank == 0) {
-        algo.stage();
-        bytes_for_algo = algo.staged_data_size();
+      if (leaders_comm != MPI_COMM_NULL) {
+        int leaders_rank { -1 };
+        MPI_Comm_rank(leaders_comm, &leaders_rank);
+
+        if (leaders_rank == 0) {
+          logger->info("Leader-of-leaders running Algorithm staging.");
+          algo.stage();
+          bytes_for_algo = algo.staged_data_size();
+        }
+
+        // Leader of leaders broadcasts info to the other shmem rank 0s
+        auto mpi_type { sbio::mpi::type_for<decltype(bytes_for_algo)>() };
+        MPI_Bcast(&bytes_for_algo, 1, mpi_type, 0, leaders_comm);
       }
 
-      // Distribute the size information to all ranks
+      // Shmem rank 0s now broadcast to the other ranks
       auto mpi_type { sbio::mpi::type_for<decltype(bytes_for_algo)>() };
       MPI_Bcast(&bytes_for_algo, 1, mpi_type, 0, shmem_comm);
 
-      // Create the reference counted MPI window
       void* baseptr { nullptr };
       window = RCWindow::make_rc(sbio::use_rc_alloc_del,
                                  sbio::MPIWinAllocator {},
@@ -275,18 +297,29 @@ namespace xalgospp::scheduling {
                                  bytes_for_algo,
                                  &baseptr);
 
-      // Will synchronize on the window
+      // Synchronize the window
       if (*window != MPI_WIN_NULL) {
+        logger->trace("Synchronizing Window before copy.");
         MPI_Win_fence(0, *window);
       }
 
-      if (shmem_rank == 0) {
-        // The node rank 0 now populates the RC-wrapped window with the data
-        std::memcpy(baseptr, algo.get_staged_data(), bytes_for_algo);
+      // Leader of leaders sets window memory, then broadcasts to other leaders
+      if (leaders_comm != MPI_COMM_NULL) {
+        int leaders_rank { -1 };
+        MPI_Comm_rank(leaders_comm, &leaders_rank);
+        if (leaders_rank == 0) {
+          logger->debug("Leader-of-leaders copying data to Window.");
+          std::memcpy(baseptr, algo.get_staged_data(), bytes_for_algo);
+        }
+
+        logger->info("Distributing staged data among leader ranks.");
+        // This can be slow sadly...
+        MPI_Bcast(baseptr, static_cast<int>(bytes_for_algo), MPI_BYTE, 0, leaders_comm);
+        MPI_Comm_free(&leaders_comm);
       }
 
-      // Will synchronize on the window
       if (*window != MPI_WIN_NULL) {
+        logger->trace("Synchronizing Window after copy.");
         MPI_Win_fence(0, *window);
       }
 

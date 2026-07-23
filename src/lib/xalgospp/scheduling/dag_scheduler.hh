@@ -44,12 +44,18 @@ typedef SSIZE_T ssize_t;
 #include <vector>
 
 namespace xalgospp::scheduling {
+  /**
+   * Alias for the definition of an array's shape - used mostly for buffer pools.
+   */
   using ShapeKey = std::vector<ssize_t>;
 
+  /**
+   * Alias for look-up of buffer pools by node locality, shape and datatype.
+   */
   using PoolKey = std::tuple<numa_node_t, ShapeKey, ncarray::DType>;
 
   /**
-   * The primary scheduler of processing work defined by a DAG.
+   * @brief The primary scheduler of processing work defined by a DAG.
    *
    * The scheduler has a hierarchy of preferences for selecting the next piece of
    * work to be run. It starts by searching its local queues (in the sense of NUMA

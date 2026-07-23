@@ -311,6 +311,8 @@ int main(int argc, char* argv[]) {
 
       scheduler.stage_algorithm(*calib_algo, shmem_type);
 
+      scheduler.check_memory_bandwidth();
+
       //std::size_t frame_count { 0 };
       std::atomic<std::size_t> frame_count { 0 };
 
