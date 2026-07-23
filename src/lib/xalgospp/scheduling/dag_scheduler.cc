@@ -524,27 +524,30 @@ namespace xalgospp::scheduling {
   }
 
   void DagScheduler::wait_all() {
-    std::unique_lock<std::mutex> lock(m_wait_mutex);
+    {
+      std::unique_lock<std::mutex> lock(m_wait_mutex);
 
-    auto wait_on_work = [this]() {
-      if (m_unfinished_tasks.load(std::memory_order_acquire) != 0) {
-        return false;
-      }
-      if (m_num_suspended_generators.load(std::memory_order_acquire) != 0) {
-        return false;
-      }
-      if (!m_global_queue.empty()) {
-        return false;
-      }
-      for (const auto& q : m_node_queues) {
-        if (!q->empty()) {
+      auto wait_on_work = [this]() {
+        std::size_t unfinished { m_unfinished_tasks.load(std::memory_order_acquire) };
+        if (unfinished != 0 && unfinished < 0x7FFFFFFFFFFFFFFF) {
           return false;
         }
-      }
-      return true;
-    };
+        if (m_num_suspended_generators.load(std::memory_order_acquire) != 0) {
+          return false;
+        }
+        if (!m_global_queue.empty()) {
+          return false;
+        }
+        for (const auto& q : m_node_queues) {
+          if (!q->empty()) {
+            return false;
+          }
+        }
+        return true;
+      };
 
-    m_wait_cv.wait(lock, wait_on_work);
+      m_wait_cv.wait(lock, wait_on_work);
+    }
 
     if (m_world_comm != MPI_COMM_NULL) {
       MPI_Barrier(m_world_comm);
@@ -567,10 +570,18 @@ namespace xalgospp::scheduling {
     // NOTE: Must perform the decrement on the Task count before making throttling
     //       decision, since this Task is currently completing. Otherwise, things
     //       exit early/will hang if Barriers have been introduced in some places.
-    m_unfinished_tasks.fetch_sub(1, std::memory_order_acq_rel);
+    std::size_t current = m_unfinished_tasks.load(std::memory_order_acquire);
+    while (current > 0) {
+      if (m_unfinished_tasks.compare_exchange_weak(current,
+                                                   current - 1,
+                                                   std::memory_order_acq_rel)) {
+        break;
+      }
+    }
 
     std::vector<std::shared_ptr<Task>> to_resume;
     {
+      std::lock_guard<std::mutex> lock(m_suspension_mutex);
       if (!m_suspended_generators.empty()) {
         std::size_t unfinished { m_unfinished_tasks.load(std::memory_order_acquire) };
         std::size_t suspended { m_num_suspended_generators.load(std::memory_order_acquire) };
@@ -578,13 +589,13 @@ namespace xalgospp::scheduling {
         if (!should_throttle_generators() || unfinished <= suspended) {
           to_resume = std::move(m_suspended_generators);
           m_suspended_generators.clear();
-          m_num_suspended_generators.store(0, std::memory_order_release);
         }
       }
     }
 
     for (auto& gen_task : to_resume) {
       enqueue(std::move(gen_task));
+      m_num_suspended_generators.fetch_sub(1, std::memory_order_release);
     }
 
     // Careful with underflows since these are not signed
@@ -747,7 +758,7 @@ namespace xalgospp::scheduling {
           return false;
         };
 
-        m_job_cv.wait(lock, wait_for_work);
+        m_job_cv.wait_for(lock, std::chrono::milliseconds(100), wait_for_work);
       }
     }
 
