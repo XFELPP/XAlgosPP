@@ -266,7 +266,7 @@ namespace xalgospp::scheduling {
      * @param[in] dtype The datatype for the requested array.
      * @returns A shared pointer to the array in the pool.
      */
-    std::shared_ptr<ncarray::NCArray> acquire_buffer(numa_node_t node,
+    std::shared_ptr<ncarray::SOArray> acquire_buffer(numa_node_t node,
                                                      ssize_t ndim,
                                                      const ssize_t* shape,
                                                      ncarray::DType dtype);

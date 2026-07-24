@@ -23,6 +23,7 @@
 #include "xalgospp/scheduling/task.hh"
 
 #include <ncarray/ncarrays.hh>
+#include <ncarray/soarrays.hh>
 
 #include <memory>
 #include <mutex>
@@ -58,12 +59,12 @@ namespace xalgospp::scheduling {
       }
     }
 
-    std::shared_ptr<ncarray::NCArray> acquire() {
+    std::shared_ptr<ncarray::SOArray> acquire() {
       std::lock_guard<std::mutex> lock(m_mutex);
-      ncarray::NCArray* raw_ptr { nullptr };
+      ncarray::SOArray* raw_ptr { nullptr };
 
       if (m_free_buffers.empty()) {
-        raw_ptr = new ncarray::NCArray(m_ndim, m_shape.data(), m_dtype);
+        raw_ptr = new ncarray::SOArray(m_ndim, m_shape.data(), m_dtype);
         m_total_allocated++;
       } else {
         raw_ptr = m_free_buffers.back();
@@ -72,11 +73,11 @@ namespace xalgospp::scheduling {
 
       auto self = shared_from_this();
 
-      auto deleter = [self](ncarray::NCArray* ptr) {
+      auto deleter = [self](ncarray::SOArray* ptr) {
         self->release(ptr);
       };
 
-      return std::shared_ptr<ncarray::NCArray>(raw_ptr, deleter);
+      return std::shared_ptr<ncarray::SOArray>(raw_ptr, deleter);
     }
 
     std::size_t free_count() const {
@@ -104,13 +105,13 @@ namespace xalgospp::scheduling {
     }
 
   private:
-    void release(ncarray::NCArray* ptr) {
+    void release(ncarray::SOArray* ptr) {
       std::lock_guard<std::mutex> lock(m_mutex);
       m_free_buffers.push_back(ptr);
     }
 
     mutable std::mutex m_mutex;
-    std::vector<ncarray::NCArray*> m_free_buffers;
+    std::vector<ncarray::SOArray*> m_free_buffers;
     std::size_t m_total_allocated { 0 };
 
     ssize_t m_ndim;

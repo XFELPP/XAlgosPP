@@ -23,8 +23,10 @@
 #include "xalgospp/scheduling/task.hh"
 
 #include <ncarray/ncarrays.hh>
+#include <ncarray/soarrays.hh>
 #ifdef XALG_HAS_CUDA
 #include <ncarray/ncdevarrays.cuh>
+#include <ncarray/sodevarrays.cuh>
 #endif
 #include <ncarray/storage.hh>
 
@@ -68,17 +70,17 @@ namespace xalgospp::scheduling {
                                             input.shape(),
                                             ncarray::DType::float32);
 
-      ncarray::NCViewFor<MemTag> out_view = m_output->view();
+      ncarray::SOViewFor<MemTag> out_view = m_output->view();
       m_algo->process(input, out_view);
     }
 
-    ncarray::NCViewFor<MemTag> get_output_view() const { return m_output->view(); }
+    ncarray::SOViewFor<MemTag> get_output_view() const { return m_output->view(); }
 
   private:
     DagScheduler& m_scheduler;
     std::shared_ptr<Algo> m_algo;
     std::shared_ptr<ParentTask> m_parent;
-    std::shared_ptr<ncarray::NCOwnerFor<MemTag>> m_output;
+    std::shared_ptr<ncarray::SOOwnerFor<MemTag>> m_output;
   };
 
 } // namespace xalgospp::scheduling

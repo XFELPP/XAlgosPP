@@ -10,10 +10,10 @@
 #include <sbio/execution/mpi_threaded.hh>
 #include <sbio/execution/threaded.hh>
 #include <sbio/io/posix.hh>
-#include <sbio/xtc2_broker.hh>
 
 #include <mpi.h>
 #include <ncarray/ncarrays.hh>
+#include <ncarray/soarrays.hh>
 
 #include <unistd.h>
 
@@ -324,7 +324,7 @@ int main(int argc, char* argv[]) {
         auto random_reader =
             std::make_shared<xalgospp::scheduling::RandomDeviceReader>("/dev/urandom");
 
-        auto circular_buffers = std::make_shared<std::vector<ncarray::NCArray>>();
+        auto circular_buffers = std::make_shared<std::vector<ncarray::SOArray>>();
         for (int i = 0; i < 4; ++i) {
           circular_buffers->emplace_back(ndim, shape, ncarray::DType::uint16);
         }

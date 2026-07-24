@@ -23,6 +23,7 @@
 #include <Eigen/Dense>
 #include <ncarray/dtype.hh>
 #include <ncarray/ncarrays.hh>
+#include <ncarray/soarrays.hh>
 
 #include <stdexcept>
 #include <string>
@@ -61,7 +62,7 @@ namespace xalgospp {
    */
   template <typename T>
   inline Eigen::Map<Eigen::Array<T, Eigen::Dynamic, 1>>
-  to_eigen_array(const ncarray::NCArrayView& view) {
+  to_eigen_array(const ncarray::SOArrayView& view) {
     return Eigen::Map<Eigen::Array<T, Eigen::Dynamic, 1>>(static_cast<T*>(view.data()),
                                                           view.size());
   }

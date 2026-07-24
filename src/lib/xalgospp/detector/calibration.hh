@@ -31,6 +31,7 @@
 #include <ncarray/expression/stencil.hh>
 #endif
 #include <ncarray/ncarrays.hh>
+#include <ncarray/soarrays.hh>
 
 #include <spdlog/sinks/stdout_color_sinks.h>
 #include <spdlog/spdlog.h>
@@ -235,8 +236,8 @@ namespace xalgospp::det {
   template <typename Policy = RuntimeCalibPolicy, typename MemTag = ncarray::HostTag>
   class Calibration : public Algorithm<Calibration<Policy, MemTag>, MemTag> {
   public:
-    using Input = type_list<ncarray::NCViewFor<MemTag>>;  // Raw detector frames
-    using Output = type_list<ncarray::NCViewFor<MemTag>>; // Calibrated frames
+    using Input = type_list<ncarray::SOViewFor<MemTag>>;  // Raw detector frames
+    using Output = type_list<ncarray::SOViewFor<MemTag>>; // Calibrated frames
 
     struct Params : public Parameters<Params> {
       // These are LCLS2-specific metadata parameters for fetching constants.
@@ -323,9 +324,9 @@ namespace xalgospp::det {
         constexpr ssize_t ndim { 1 };
         ssize_t shape[ndim] { nelem };
         ssize_t strides[ndim] { ncarray::itemsize(ncarray::DType::vfloat2) };
-        m_dev_constants = ncarray::NCOwnerFor<ncarray::DevTag>(1, shape, ncarray::DType::vfloat2);
+        m_dev_constants = ncarray::SOOwnerFor<ncarray::DevTag>(1, shape, ncarray::DType::vfloat2);
 
-        ncarray::NCViewFor<ncarray::HostTag> consts_view(m_constants.data(),
+        ncarray::SOViewFor<ncarray::HostTag> consts_view(m_constants.data(),
                                                          ndim,
                                                          shape,
                                                          strides,
@@ -351,7 +352,7 @@ namespace xalgospp::det {
      * @param[in] input The uncalibrated raw data.
      * @param[out] output The array to hold the output calibrated data.
      */
-    void process_impl(const ncarray::NCViewFor<MemTag>& input, ncarray::NCViewFor<MemTag>& output) const {
+    void process_impl(const ncarray::SOViewFor<MemTag>& input, ncarray::SOViewFor<MemTag>& output) const {
       if constexpr (std::is_same_v<MemTag, ncarray::HostTag>) {
         if (m_constants.empty()) {
           throw std::runtime_error("[Calibration] Run-time error: Staging has not been run!");
@@ -469,11 +470,11 @@ namespace xalgospp::det {
         constexpr ssize_t ndim { 1 };
         ssize_t shape[ndim] { nelem };
         ssize_t strides[ndim] { ncarray::itemsize(ncarray::DType::vfloat2) };
-        m_dev_constants = ncarray::NCOwnerFor<ncarray::DevTag>(1,
+        m_dev_constants = ncarray::SOOwnerFor<ncarray::DevTag>(1,
                                                                shape,
                                                                ncarray::DType::vfloat2);
 
-        ncarray::NCViewFor<ncarray::HostTag> consts_view(m_constants.data(),
+        ncarray::SOViewFor<ncarray::HostTag> consts_view(m_constants.data(),
                                                          ndim,
                                                          shape,
                                                          strides,
@@ -657,7 +658,7 @@ namespace xalgospp::det {
 #endif
     }
 
-    void build_stencil(const ncarray::NCViewFor<MemTag>& input) const {
+    void build_stencil(const ncarray::SOViewFor<MemTag>& input) const {
 #ifdef XALG_HAS_CUDA
       std::vector<ncarray::StaticCoords<3>> offsets = { {0, 0, 0} };
 
@@ -711,7 +712,7 @@ namespace xalgospp::det {
                                                              is_pointer_axis,
                                                              calib_expr,
                                                              ext,
-                                                             /*is_soarr=*/false);
+                                                             /*is_soarr=*/true);
 #endif
     }
 
@@ -733,7 +734,7 @@ namespace xalgospp::det {
     std::vector<std::uint8_t> m_serialized_data;
 
 #ifdef XALG_HAS_CUDA
-    ncarray::NCOwnerFor<ncarray::DevTag> m_dev_constants;
+    ncarray::SOOwnerFor<ncarray::DevTag> m_dev_constants;
 
     mutable std::optional<ncarray::Stencil<3>> m_stencil;
 #endif

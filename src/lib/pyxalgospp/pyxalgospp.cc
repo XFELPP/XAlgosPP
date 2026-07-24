@@ -17,25 +17,110 @@
  * this program. If not, see <https://www.gnu.org/licenses/>.
  */
 
+#include "pyxalgospp/scheduling.hh"
+
 #include "xalgospp/algorithm.hh"
 #include "xalgospp/detector/calibration.hh"
 #include "xalgospp/detector/lcls2/calibdb.hh"
+#include "xalgospp/scheduling/dag_scheduler.hh"
+#include "xalgospp/scheduling/staging.hh"
 
-#include "spdlog/cfg/env.h"
-
+#include <ncarray/soarrays.hh>
 #include <pybind11/numpy.h>
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
+#include <spdlog/cfg/env.h>
 
 #include <string>
 
 namespace py = pybind11;
 
 PYBIND11_MODULE(_pyxalgospp, pyxalgospp_module, py::mod_gil_not_used()) {
-  // NOTE: This must be in PYTHONPATH (or generally accessible!) or init will fail
+  // NOTE: This must be accessible (in PYTHONPATH minimally!) or init will fail
   py::module_::import("ncarray");
 
   spdlog::cfg::load_env_levels("PYXALGOSPP_LOG_LEVEL");
+
+  // ----- Scheduler and DAG Bindings ----- //
+
+  py::enum_<xalgospp::scheduling::ShmemType>(pyxalgospp_module, "ShmemType")
+    .value("MACHINE", xalgospp::scheduling::ShmemType::MACHINE)
+    .value("SOCKET", xalgospp::scheduling::ShmemType::SOCKET)
+    .value("NUMA", xalgospp::scheduling::ShmemType::NUMA)
+    .value("L3CACHE", xalgospp::scheduling::ShmemType::L3CACHE)
+    .value("L2CACHE", xalgospp::scheduling::ShmemType::L2CACHE)
+    .export_values();
+
+  py::classh<xalgospp::scheduling::ResourceRequirements>(pyxalgospp_module,
+                                                         "ResourceRequirements")
+    .def(py::init<>())
+    .def_readwrite("memory_intensity",
+                   &xalgospp::scheduling::ResourceRequirements::memory_intensity)
+    .def_readwrite("requires_gpu",
+                   &xalgospp::scheduling::ResourceRequirements::requires_gpu)
+    .def_readwrite("custom_slots",
+                   &xalgospp::scheduling::ResourceRequirements::custom_slots);
+
+  py::classh<xalgospp::scheduling::LocalityHint>(pyxalgospp_module, "LocalityHint")
+    .def(py::init<>())
+    .def_readwrite("preferred_node",
+                   &xalgospp::scheduling::LocalityHint::preferred_node);
+
+  py::class_<
+    xalgospp::scheduling::Task,
+    pyxalgospp::scheduling::PyTask,
+    std::shared_ptr<xalgospp::scheduling::Task>
+  >(pyxalgospp_module, "Task")
+    .def(py::init<>())
+    .def("execute", &xalgospp::scheduling::Task::execute)
+    .def("is_generator", &xalgospp::scheduling::Task::is_generator)
+    .def("locality", &xalgospp::scheduling::Task::locality)
+    .def("set_locality", &xalgospp::scheduling::Task::set_locality)
+    .def("resources", &xalgospp::scheduling::Task::resources)
+    .def("set_resources", &xalgospp::scheduling::Task::set_resources)
+    .def("add_dependency", &xalgospp::scheduling::Task::add_dependency,
+         py::arg("parent"));
+
+  using DagScheduler = xalgospp::scheduling::DagScheduler;
+  py::classh<DagScheduler::Config>(pyxalgospp_module, "DagSchedulerConfig")
+    .def(py::init<>())
+    .def_readwrite("num_numa_nodes", &DagScheduler::Config::num_numa_nodes)
+    .def_readwrite("threads_per_node", &DagScheduler::Config::threads_per_node)
+    .def_readwrite("enable_pinning", &DagScheduler::Config::enable_pinning)
+    .def_readwrite("max_concurrent_high_mem",
+                   &DagScheduler::Config::max_concurrent_high_mem)
+    .def_readwrite("max_concurrency_multiplier",
+                   &DagScheduler::Config::max_concurrency_multiplier)
+    .def_readwrite("enable_dynamic_backpressure",
+                   &DagScheduler::Config::enable_dynamic_backpressure)
+    .def_readwrite("enable_autotuning", &DagScheduler::Config::enable_autotuning)
+    .def_readwrite("raw_frame_size_bytes", &DagScheduler::Config::raw_frame_size_bytes)
+    .def_readwrite("warmup_submissions", &DagScheduler::Config::warmup_submissions)
+    .def_readwrite("node_memory_bandwidth_limit_gbps",
+                   &DagScheduler::Config::node_memory_bandwidth_limit_gbps)
+    .def_readwrite("percent_bandwidth_is_high_mem",
+                   &DagScheduler::Config::percent_bandwidth_is_high_mem);
+
+  py::classh<DagScheduler>(pyxalgospp_module, "DagScheduler")
+    .def(py::init<DagScheduler::Config>(), py::arg("config") = DagScheduler::Config{})
+    .def("submit_dag",
+         &DagScheduler::submit_dag,
+         py::arg("tasks"),
+         py::call_guard<py::gil_scoped_release>())
+    .def("enqueue",
+         &DagScheduler::enqueue,
+         py::arg("task"),
+         py::call_guard<py::gil_scoped_release>())
+    .def("wait_all",
+         &DagScheduler::wait_all,
+         py::call_guard<py::gil_scoped_release>())
+    .def("check_memory_bandwidth",
+         &DagScheduler::check_memory_bandwidth,
+         py::arg("test_bytes") = 32ULL * 1024 * 1024,
+         py::arg("niter") = 10,
+         py::call_guard<py::gil_scoped_release>());
+
+  // ----- Direct Algorithm Bindings ----- //
 
   py::enum_<xalgospp::det::CalibParameters::MappingMode>(pyxalgospp_module, "MappingMode")
     .value("Direct", xalgospp::det::CalibParameters::MappingMode::Direct)
@@ -76,16 +161,16 @@ PYBIND11_MODULE(_pyxalgospp, pyxalgospp_module, py::mod_gil_not_used()) {
     .def("stage", [](RtCalibration& self) { self.stage(); })
     .def("process",
          [](const RtCalibration& self,
-            const ncarray::NCArrayView& input,
-            ncarray::NCArrayView& output) {
+            const ncarray::SOArrayView& input,
+            ncarray::SOArrayView& output) {
            return self.process(input, output);
          },
          py::arg("input"),
          py::arg("output"))
     .def("__call__",
          [](const RtCalibration& self,
-            const ncarray::NCArrayView& input,
-            ncarray::NCArrayView& output) {
+            const ncarray::SOArrayView& input,
+            ncarray::SOArrayView& output) {
            return self.process(input, output);
          },
          py::arg("input"),

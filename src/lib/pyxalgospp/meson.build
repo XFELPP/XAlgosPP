@@ -1,5 +1,9 @@
 #### Python Bindings ####
 #########################
+installed_py_scheduling_headers = [
+    'scheduling.hh',
+]
+
 if build_python_opt
     # Figure out dependencies
     deps_for_py_mod = deps_for_xalgospp + [ncarray_dep, pybind11_dep, py3_dep, xalgospp_dep]
@@ -18,3 +22,16 @@ if build_python_opt
         # link_args: py_mod_link_args,
     )
 endif # build_python_opt
+
+if not xalg_as_wheel_opt and build_core_opt
+    install_headers(
+        installed_py_scheduling_headers,
+        install_dir: header_install_dir / 'pyxalgospp',
+    )
+else
+    py3.install_sources(
+        installed_py_scheduling_headers,
+        pure: false,
+        subdir: 'xalgospp/include/pyxalgospp',
+    )
+endif # not xalg_as_wheel_opt and build_core_opt

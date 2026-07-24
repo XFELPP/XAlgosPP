@@ -23,8 +23,10 @@
 #include "xalgospp/scheduling/task.hh"
 
 #include <ncarray/ncarrays.hh>
+#include <ncarray/soarrays.hh>
 #ifdef XALG_HAS_CUDA
 #include <ncarray/ncdevarrays.cuh>
+#include <ncarray/sodevarrays.cuh>
 #endif
 #include <ncarray/storage.hh>
 
@@ -162,7 +164,7 @@ namespace xalgospp::scheduling {
 
     const void* const* get_output_ptr_address() const { return &m_output_ptr; }
 
-    ncarray::NCViewFor<MemTag> get_output_view() const { return m_output_view; }
+    ncarray::SOViewFor<MemTag> get_output_view() const { return m_output_view; }
 
     void execute() override {
       m_output_view = m_fetcher(m_idx);
@@ -174,7 +176,7 @@ namespace xalgospp::scheduling {
     DataSource& m_ds;
     DataFetcher m_fetcher;
     StepIdxType m_idx;
-    ncarray::NCViewFor<MemTag> m_output_view;
+    ncarray::SOViewFor<MemTag> m_output_view;
     const void* m_output_ptr { nullptr };
   };
 

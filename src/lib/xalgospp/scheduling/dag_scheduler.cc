@@ -774,7 +774,7 @@ namespace xalgospp::scheduling {
                     m_num_suspended_generators.load());
   }
 
-  std::shared_ptr<ncarray::NCArray> DagScheduler::acquire_buffer(numa_node_t node,
+  std::shared_ptr<ncarray::SOArray> DagScheduler::acquire_buffer(numa_node_t node,
                                                                  ssize_t ndim,
                                                                  const ssize_t* shape,
                                                                  ncarray::DType dtype) {
