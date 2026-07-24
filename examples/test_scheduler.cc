@@ -172,15 +172,13 @@ int main(int argc, char* argv[]) {
   using MPIDataSource = DataSource<
     SyncPOSIXIO,
     MPIThreadedExecution,
-    XTC2Traits,
-    XTC2StreamBroker<SyncPOSIXIO, MPIThreadedExecution>
+    XTC2Traits
   >;
 
   using SerialDataSource = DataSource<
     SyncPOSIXIO,
     ThreadedExecution,
-    XTC2Traits,
-    XTC2StreamBroker<SyncPOSIXIO, ThreadedExecution>
+    XTC2Traits
   >;
 
   {
