@@ -31,11 +31,13 @@
 #include <pybind11/stl.h>
 #include <spdlog/cfg/env.h>
 
+#include <memory>
 #include <string>
+#include <vector>
 
 namespace py = pybind11;
 
-PYBIND11_MODULE(_pyxalgospp, pyxalgospp_module, py::mod_gil_not_used()) {
+PYBIND11_MODULE(_pyxalgospp, pyxalgospp_module) {
   // NOTE: This must be accessible (in PYTHONPATH minimally!) or init will fail
   py::module_::import("ncarray");
 
@@ -78,7 +80,18 @@ PYBIND11_MODULE(_pyxalgospp, pyxalgospp_module, py::mod_gil_not_used()) {
     .def("set_locality", &xalgospp::scheduling::Task::set_locality)
     .def("resources", &xalgospp::scheduling::Task::resources)
     .def("set_resources", &xalgospp::scheduling::Task::set_resources)
-    .def("add_dependency", &xalgospp::scheduling::Task::add_dependency,
+    .def("add_dependency",
+         [](py::object self_obj, py::object parent_obj) {
+           auto self_task = py::cast<std::shared_ptr<xalgospp::scheduling::Task>>(self_obj);
+           auto parent_task = py::cast<std::shared_ptr<xalgospp::scheduling::Task>>(parent_obj);
+           if (auto py_self = std::dynamic_pointer_cast<pyxalgospp::scheduling::PyTask>(self_task)) {
+             py_self->attach_python_object(self_obj);
+           }
+           if (auto py_parent = std::dynamic_pointer_cast<pyxalgospp::scheduling::PyTask>(parent_task)) {
+             py_parent->attach_python_object(parent_obj);
+           }
+           self_task->add_dependency(parent_task);
+         },
          py::arg("parent"));
 
   using DagScheduler = xalgospp::scheduling::DagScheduler;
@@ -101,8 +114,29 @@ PYBIND11_MODULE(_pyxalgospp, pyxalgospp_module, py::mod_gil_not_used()) {
     .def_readwrite("percent_bandwidth_is_high_mem",
                    &DagScheduler::Config::percent_bandwidth_is_high_mem);
 
+  using RtCalibration = xalgospp::det::Calibration<xalgospp::det::RuntimeCalibPolicy>;
   py::classh<DagScheduler>(pyxalgospp_module, "DagScheduler")
     .def(py::init<DagScheduler::Config>(), py::arg("config") = DagScheduler::Config{})
+    .def("stage_algorithm",
+         [](DagScheduler& self, RtCalibration& algo, xalgospp::scheduling::ShmemType st) {
+           self.stage_algorithm(algo, st);
+         },
+         py::arg("algo"),
+         py::arg("shmem_type") = xalgospp::scheduling::ShmemType::SOCKET,
+         py::call_guard<py::gil_scoped_release>())
+    .def("acquire_buffer",
+         [](DagScheduler& self,
+            const std::vector<ssize_t>& shape,
+            ncarray::DType dtype,
+            int node) {
+           const ssize_t* s { shape.data() };
+           ssize_t ndim { static_cast<ssize_t>(shape.size()) };
+
+           return self.acquire_buffer(node, ndim, s, dtype);
+         },
+         py::arg("shape"),
+         py::arg("dtype") = ncarray::DType::float32,
+         py::arg("node") = -1)
     .def("submit_dag",
          &DagScheduler::submit_dag,
          py::arg("tasks"),
@@ -127,7 +161,6 @@ PYBIND11_MODULE(_pyxalgospp, pyxalgospp_module, py::mod_gil_not_used()) {
     .value("Epix10k", xalgospp::det::CalibParameters::MappingMode::Epix10k)
     .export_values();
 
-  using RtCalibration = xalgospp::det::Calibration<xalgospp::det::RuntimeCalibPolicy>;
   py::classh<RtCalibration::Params>(pyxalgospp_module, "CalibrationParams")
     .def(py::init<>())
     .def_readwrite("base_url", &RtCalibration::Params::base_url)
@@ -166,7 +199,8 @@ PYBIND11_MODULE(_pyxalgospp, pyxalgospp_module, py::mod_gil_not_used()) {
            return self.process(input, output);
          },
          py::arg("input"),
-         py::arg("output"))
+         py::arg("output"),
+         py::call_guard<py::gil_scoped_release>())
     .def("__call__",
          [](const RtCalibration& self,
             const ncarray::SOArrayView& input,
@@ -174,7 +208,8 @@ PYBIND11_MODULE(_pyxalgospp, pyxalgospp_module, py::mod_gil_not_used()) {
            return self.process(input, output);
          },
          py::arg("input"),
-         py::arg("output"));
+         py::arg("output"),
+         py::call_guard<py::gil_scoped_release>());
 
   py::classh<xalgospp::lcls2::CalibDocMetadata>(pyxalgospp_module, "CalibDocMetadata")
     .def_readonly("unix_timestamp", &xalgospp::lcls2::CalibDocMetadata::doc_unix_ts)

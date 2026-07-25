@@ -22,7 +22,11 @@
 
 #include "xalgospp/scheduling/task.hh"
 
+#include <ncarray/ncarrays.hh>
+#include <ncarray/soarrays.hh>
 #include <pybind11/pybind11.h>
+
+#include <memory>
 
 namespace py = pybind11;
 
@@ -30,17 +34,43 @@ namespace pyxalgospp::scheduling {
   /**
    * A minimal trampoline class for allowing Python Task subclassing with DagScheduler.
    */
-  class PyTask : xalgospp::scheduling::Task {
+  class PyTask : public xalgospp::scheduling::Task {
   public:
     using xalgospp::scheduling::Task::Task;
 
+    void attach_python_object(py::object obj) {
+      if (!m_py_obj) {
+        m_py_obj = obj;
+      }
+    }
+
+    void release_python_object() {
+      py::gil_scoped_acquire acquire;
+      m_py_obj = py::object();
+    }
+
+    ~PyTask() override {
+      if (m_py_obj) {
+        py::gil_scoped_acquire acquire;
+        m_py_obj = py::object();
+      }
+    }
+
     void execute() override {
-      PYBIND11_OVERRIDE_PURE(void, Task, execute);
+      {
+        py::gil_scoped_acquire acquire;
+        PYBIND11_OVERRIDE_PURE(void, xalgospp::scheduling::Task, execute);
+      }
+      release_python_object();
     }
 
     bool is_generator() const override {
-      PYBIND11_OVERRIDE(bool, Task, is_generator);
+      py::gil_scoped_acquire acquire;
+      PYBIND11_OVERRIDE(bool, xalgospp::scheduling::Task, is_generator);
     }
+
+  private:
+    py::object m_py_obj;
   };
 } // namespace pyxalgospp::scheduling
 
