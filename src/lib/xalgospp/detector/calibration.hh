@@ -242,6 +242,9 @@ namespace xalgospp::det {
     // Calibrated output frames
     using Output = type_list<ncarray::NCViewFor<MemTag>, ncarray::SOViewFor<MemTag>>;
 
+    // Inputs must be paired with Outputs in the order they appear in the lists above
+    static constexpr AlgTypeConstraint TypeConstraint { AlgTypeConstraint::StrictOrdering };
+
     struct Params : public Parameters<Params> {
       // These are LCLS2-specific metadata parameters for fetching constants.
       std::string base_url;
@@ -356,7 +359,7 @@ namespace xalgospp::det {
      * @param[out] output The array to hold the output calibrated data.
      */
     template <typename InputArg, typename OutputArg>
-    requires (Input::template accepts<InputArg> && Output::template accepts<OutputArg>)
+    requires (Input::template accepts_when_paired<InputArg, OutputArg, Output>)
     void process_impl(const InputArg& input, OutputArg& output) const {
       if constexpr (std::is_same_v<MemTag, ncarray::HostTag>) {
         if (m_constants.empty()) {
@@ -444,7 +447,7 @@ namespace xalgospp::det {
      * @param[out] output The array to hold the output calibrated data.
      */
     template <typename InputArg, typename OutputArg>
-    requires (Input::template accepts<InputArg> && Output::template accepts<OutputArg>)
+    requires (Input::template accepts_when_paired<InputArg, OutputArg, Output>)
     void process_many_impl(std::size_t count,
                            const InputArg& input,
                            OutputArg& output) {

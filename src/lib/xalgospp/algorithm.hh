@@ -27,7 +27,8 @@
 
 #ifdef __CUDACC__
 
-#include <cuda/std/tuple>
+#include <cuda/std/cstdint>
+#include <cuda/std/type_traits>
 
 namespace hd_std = cuda::std;
 
@@ -37,7 +38,8 @@ namespace hd_std = cuda::std;
 
 #else
 
-#include <tuple>
+#include <cstdint>
+#include <type_traits>
 
 namespace hd_std = std;
 
@@ -48,6 +50,23 @@ namespace hd_std = std;
 #endif // __CUDACC__
 
 namespace xalgospp {
+  /**
+   * Indicates the degree of input/output type restrictions for an Algorithm.
+   *
+   * Algorithms provide a type_list of supported inputs and outputs. These are
+   * used both to provide easy access to supported types, but also to constrain
+   * the inputs on the Algorithm's processing routine. By default, the constraint
+   * is to allow the cartesian product of the Input and Output type_lists. An
+   * Algorithm subclass may opt instead to enforce stronger constraints, e.g., it
+   * may require strict ordering such that the first item in the Input list must be
+   * paired with the first item in the output list. Refer to each Algorithm to
+   * verify if extra constraints are in effect.
+   */
+  enum class AlgTypeConstraint : hd_std::uint8_t {
+    Product = 0,       ///< Any input type can pair with any output type
+    StrictOrdering = 1 ///< Inputs must be paired with outputs in the order the appear
+  };
+
   /**
    * Base Algorithm class.
    *
@@ -72,8 +91,29 @@ namespace xalgospp {
   public:
     Algorithm() = default;
 
+    /**
+     * The list of supported input types.
+     */
     using Input = type_list<>;
+
+    /**
+     * The list of supported output types.
+     *
+     * Algorithm's process data by receiving an output to write the result to. These
+     * types are those supported for that purpose.
+     *
+     * Algorithms provide a type_list of supported inputs and outputs. These are
+     * used both to provide easy access to supported types, but also to constrain
+     * the inputs on the Algorithm's processing routine. By default, the constraint
+     * is to allow the cartesian product of the Input and Output type_lists. An
+     * Algorithm subclass may opt instead to enforce stronger constraints, e.g., it
+     * may require strict ordering such that the first item in the Input list must be
+     * paired with the first item in the output list. Refer to each Algorithm to
+     * verify if extra constraints are in effect.
+     */
     using Output = type_list<>;
+
+    static constexpr AlgTypeConstraint TypeConstraint { AlgTypeConstraint::Product };
 
     /**
      * Perform configuration of the algorithm given an input set of parameters.
@@ -150,7 +190,20 @@ namespace xalgospp {
       return 0;
     }
 
-    template <typename InputArg, typename OutputArg, typename D = Derived>
+    template <
+      typename InputArg,
+      typename OutputArg,
+      typename D = Derived,
+      typename = hd_std::enable_if_t<
+      []() {
+        if constexpr (requires { D::TypeConstraint == AlgTypeConstraint::StrictOrdering; }) {
+          return D::Input::template accepts_when_paired<InputArg, OutputArg, typename D::Output>;
+        } else {
+          return D::Input::template accepts<InputArg> && D::Output::template accepts<OutputArg>;
+        }
+      }()
+      >
+    >
     requires (D::Input::template accepts<InputArg> && D::Output::template accepts<OutputArg>)
     void process(InputArg&& input, OutputArg&& output) const {
       static_assert(Derived::Input::template accepts<InputArg>,
@@ -162,8 +215,20 @@ namespace xalgospp {
                                                       hd_std::forward<OutputArg>(output));
     }
 
-    template <typename InputArg, typename OutputArg, typename D = Derived>
-    requires (D::Input::template accepts<InputArg> && D::Output::template accepts<OutputArg>)
+    template <
+      typename InputArg,
+      typename OutputArg,
+      typename D = Derived,
+      typename = hd_std::enable_if_t<
+      []() {
+        if constexpr (requires { D::TypeConstraint == AlgTypeConstraint::StrictOrdering; }) {
+          return D::Input::template accepts_when_paired<InputArg, OutputArg, typename D::Output>;
+        } else {
+          return D::Input::template accepts<InputArg> && D::Output::template accepts<OutputArg>;
+        }
+      }()
+      >
+    >
     void process(InputArg&& input, OutputArg&& output) {
       static_assert(Derived::Input::template accepts<InputArg>,
                     "Algorithm Error: Input type not supported by Derived::Input list");
@@ -192,10 +257,20 @@ namespace xalgospp {
       process(hd_std::forward<InputArg>(input), hd_std::forward<OutputArg>(output));
     }
 
-
-
-    template <typename InputArg, typename OutputArg, typename D = Derived>
-    requires (D::Input::template accepts<InputArg> && D::Output::template accepts<OutputArg>)
+    template <
+      typename InputArg,
+      typename OutputArg,
+      typename D = Derived,
+      typename = hd_std::enable_if_t<
+      []() {
+        if constexpr (requires { D::TypeConstraint == AlgTypeConstraint::StrictOrdering; }) {
+          return D::Input::template accepts_when_paired<InputArg, OutputArg, typename D::Output>;
+        } else {
+          return D::Input::template accepts<InputArg> && D::Output::template accepts<OutputArg>;
+        }
+      }()
+      >
+    >
     void process_many(hd_std::size_t count, InputArg&& input, OutputArg&& output) const {
       static_assert(Derived::Input::template accepts<InputArg>,
                     "Algorithm Error: Input type not supported by Derived::Input list");
@@ -207,8 +282,20 @@ namespace xalgospp {
                                                            hd_std::forward<OutputArg>(output));
     }
 
-    template <typename InputArg, typename OutputArg, typename D = Derived>
-    requires (D::Input::template accepts<InputArg> && D::Output::template accepts<OutputArg>)
+    template <
+      typename InputArg,
+      typename OutputArg,
+      typename D = Derived,
+      typename = hd_std::enable_if_t<
+      []() {
+        if constexpr (requires { D::TypeConstraint == AlgTypeConstraint::StrictOrdering; }) {
+          return D::Input::template accepts_when_paired<InputArg, OutputArg, typename D::Output>;
+        } else {
+          return D::Input::template accepts<InputArg> && D::Output::template accepts<OutputArg>;
+        }
+      }()
+      >
+    >
     void process_many(hd_std::size_t count, InputArg&& input, OutputArg&& output) {
       static_assert(Derived::Input::template accepts<InputArg>,
                     "Algorithm Error: Input type not supported by Derived::Input list");

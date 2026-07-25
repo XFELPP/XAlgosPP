@@ -58,14 +58,86 @@ namespace xalgospp {
    */
   template <typename... Ts>
   struct type_list {
+  private:
+    // helpers for doing the public indexing implementations below
+    template <typename Target, hd_std::size_t Index, typename Head, typename... Tail>
+    struct index_of_impl {
+      static constexpr hd_std::ptrdiff_t value =
+        (hd_std::is_same_v<hd_std::decay_t<Target>, hd_std::decay_t<Head>> ||
+         hd_std::is_convertible_v<hd_std::decay_t<Target>, hd_std::decay_t<Head>>)
+        ? static_cast<hd_std::ptrdiff_t>(Index)
+        : index_of_impl<Target, Index + 1, Tail...>::value;
+    };
+
+    template <typename Target, hd_std::size_t Index, typename Head>
+    struct index_of_impl<Target, Index, Head> {
+      static constexpr hd_std::ptrdiff_t value =
+        (hd_std::is_same_v<hd_std::decay_t<Target>, hd_std::decay_t<Head>> ||
+         hd_std::is_convertible_v<hd_std::decay_t<Target>, hd_std::decay_t<Head>>)
+        ? static_cast<hd_std::ptrdiff_t>(Index)
+        : -1;
+    };
+
+  public:
+    /**
+     * Returns the length of the type list, i.e., the number of types.
+     *
+     * @returns The length of the type list.
+     */
     XALG_HD static constexpr hd_std::size_t size() { return sizeof...(Ts); }
 
+    /**
+     * Evaluates true if the type U is in the type list.
+     */
     template <typename U>
     static constexpr bool accepts =
       (sizeof...(Ts) == 0)                                                   ||
        ( (hd_std::is_same_v<hd_std::decay_t<U>, hd_std::decay_t<Ts>>         ||
           hd_std::is_convertible_v<hd_std::decay_t<U>, hd_std::decay_t<Ts>>) ||
       ...);
+
+    /**
+     * Access the Nth type from the list.
+     */
+    template <hd_std::size_t N>
+    using type_at = typename hd_std::tuple_element<N, hd_std::tuple<Ts...>>::type;
+
+    /**
+     * Retrieve the index N of a type from the list given the type.
+     */
+    template <typename Target>
+    static constexpr hd_std::ptrdiff_t index_of = (sizeof...(Ts) == 0)
+      ? -1
+      : index_of_impl<Target, 0, Ts...>::value;
+
+    /**
+     * Evalutes true if type U is accepted, and type V is in its list at the same index.
+     *
+     * This allows enforcement of strict ordering between two type_lists, where the
+     * checking of types requires that both types are in their respective lists, and
+     * that they appear in the same position.
+     */
+    template <typename U, typename Other, typename OtherList>
+    static constexpr bool accepts_when_paired = []() {
+      if constexpr (sizeof...(Ts) == 0 || OtherList::size() == 0) {
+        // Empty lists will just evaluate true
+        return true;
+      } else {
+        constexpr auto idx { index_of<U> };
+        if constexpr (idx < 0 || idx >= static_cast<hd_std::ptrdiff_t>(OtherList::size())) {
+          // Invalid index...
+          return false;
+        } else {
+          // Using the discovered index, pull the type from the other list at that index
+          using ExpectedOther =
+            typename OtherList::template type_at<static_cast<hd_std::size_t>(idx)>;
+
+          return
+            hd_std::is_same_v<hd_std::decay_t<Other>, hd_std::decay_t<ExpectedOther>> ||
+            hd_std::is_convertible_v<hd_std::decay_t<Other>, hd_std::decay_t<Other>>;
+        }
+      }
+    }();
   };
 
   /**
