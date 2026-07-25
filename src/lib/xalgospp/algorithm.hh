@@ -150,35 +150,84 @@ namespace xalgospp {
       return 0;
     }
 
-    template <typename... Inputs, typename... Outputs>
-    void process(const hd_std::tuple<Inputs...>& inputs,
-                 hd_std::tuple<Outputs...>& outputs) {
-      static_cast<Derived*>(this)->process_impl(inputs, outputs);
+    template <typename InputArg, typename OutputArg, typename D = Derived>
+    requires (D::Input::template accepts<InputArg> && D::Output::template accepts<OutputArg>)
+    void process(InputArg&& input, OutputArg&& output) const {
+      static_assert(Derived::Input::template accepts<InputArg>,
+                    "Algorithm Error: Input type not supported by Derived::Input list");
+      static_assert(Derived::Output::template accepts<OutputArg>,
+                    "Algorithm Error: Output type not supported by Derived::Output list");
+
+      static_cast<const Derived*>(this)->process_impl(hd_std::forward<InputArg>(input),
+                                                      hd_std::forward<OutputArg>(output));
     }
 
-    template <typename... Inputs, typename... Outputs>
-    void operator()(const hd_std::tuple<Inputs...>& inputs,
-                    hd_std::tuple<Outputs...>& outputs) {
-      static_cast<Derived*>(this)->process_impl(inputs, outputs);
-    }
+    template <typename InputArg, typename OutputArg, typename D = Derived>
+    requires (D::Input::template accepts<InputArg> && D::Output::template accepts<OutputArg>)
+    void process(InputArg&& input, OutputArg&& output) {
+      static_assert(Derived::Input::template accepts<InputArg>,
+                    "Algorithm Error: Input type not supported by Derived::Input list");
+      static_assert(Derived::Output::template accepts<OutputArg>,
+                    "Algorithm Error: Output type not supported by Derived::Output list");
 
-    template <typename Input, typename Output>
-    void process(const Input& input, Output& output) const {
       if constexpr (requires {
-          static_cast<const Derived*>(this)->process_impl(input, output);
+          static_cast<Derived*>(this)->process_impl(hd_std::forward<InputArg>(input),
+                                                    hd_std::forward<OutputArg>(output));
         }) {
-        static_cast<const Derived*>(this)->process_impl(input, output);
+        static_cast<Derived*>(this)->process_impl(hd_std::forward<InputArg>(input),
+                                                  hd_std::forward<OutputArg>(output));
       } else {
-        auto in_t { hd_std::forward_as_tuple(input) };
-        auto out_t { hd_std::forward_as_tuple(output) };
-
-        static_cast<const Derived*>(this)->process_impl(in_t, out_t);
+        static_cast<const Derived*>(this)->process_impl(hd_std::forward<InputArg>(input),
+                                                        hd_std::forward<OutputArg>(output));
       }
     }
 
-    template <typename Input, typename Output>
-    void operator()(const Input& input, Output& output) {
-      process(input, output);
+    template <typename InputArg, typename OutputArg>
+    void operator()(InputArg&& input, OutputArg&& output) {
+      process(hd_std::forward<InputArg>(input), hd_std::forward<OutputArg>(output));
+    }
+
+    template <typename InputArg, typename OutputArg>
+    void operator()(InputArg&& input, OutputArg&& output) const {
+      process(hd_std::forward<InputArg>(input), hd_std::forward<OutputArg>(output));
+    }
+
+
+
+    template <typename InputArg, typename OutputArg, typename D = Derived>
+    requires (D::Input::template accepts<InputArg> && D::Output::template accepts<OutputArg>)
+    void process_many(hd_std::size_t count, InputArg&& input, OutputArg&& output) const {
+      static_assert(Derived::Input::template accepts<InputArg>,
+                    "Algorithm Error: Input type not supported by Derived::Input list");
+      static_assert(Derived::Output::template accepts<OutputArg>,
+                    "Algorithm Error: Output type not supported by Derived::Output list");
+
+      static_cast<const Derived*>(this)->process_many_impl(count,
+                                                           hd_std::forward<InputArg>(input),
+                                                           hd_std::forward<OutputArg>(output));
+    }
+
+    template <typename InputArg, typename OutputArg, typename D = Derived>
+    requires (D::Input::template accepts<InputArg> && D::Output::template accepts<OutputArg>)
+    void process_many(hd_std::size_t count, InputArg&& input, OutputArg&& output) {
+      static_assert(Derived::Input::template accepts<InputArg>,
+                    "Algorithm Error: Input type not supported by Derived::Input list");
+      static_assert(Derived::Output::template accepts<OutputArg>,
+                    "Algorithm Error: Output type not supported by Derived::Output list");
+
+      if constexpr (requires {
+          static_cast<Derived*>(this)->process_many_impl(count,
+                                                         hd_std::forward<InputArg>(input),
+                                                         hd_std::forward<OutputArg>(output));
+        }) {
+        static_cast<Derived*>(this)->process_many_impl(count,
+                                                       hd_std::forward<InputArg>(input),
+                                                       hd_std::forward<OutputArg>(output));
+      } else {
+        static_cast<const Derived*>(this)->process_many_impl(count,
+                                                             hd_std::forward<InputArg>(input),
+                                                             hd_std::forward<OutputArg>(output));
+      }
     }
 
     const char* name() const {

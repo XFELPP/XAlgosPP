@@ -59,6 +59,13 @@ namespace xalgospp {
   template <typename... Ts>
   struct type_list {
     XALG_HD static constexpr hd_std::size_t size() { return sizeof...(Ts); }
+
+    template <typename U>
+    static constexpr bool accepts =
+      (sizeof...(Ts) == 0)                                                   ||
+       ( (hd_std::is_same_v<hd_std::decay_t<U>, hd_std::decay_t<Ts>>         ||
+          hd_std::is_convertible_v<hd_std::decay_t<U>, hd_std::decay_t<Ts>>) ||
+      ...);
   };
 
   /**

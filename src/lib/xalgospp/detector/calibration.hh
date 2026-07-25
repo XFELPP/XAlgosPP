@@ -236,8 +236,11 @@ namespace xalgospp::det {
   template <typename Policy = RuntimeCalibPolicy, typename MemTag = ncarray::HostTag>
   class Calibration : public Algorithm<Calibration<Policy, MemTag>, MemTag> {
   public:
-    using Input = type_list<ncarray::SOViewFor<MemTag>>;  // Raw detector frames
-    using Output = type_list<ncarray::SOViewFor<MemTag>>; // Calibrated frames
+    // Raw detector frames
+    using Input = type_list<ncarray::NCViewFor<MemTag>, ncarray::SOViewFor<MemTag>>;
+
+    // Calibrated output frames
+    using Output = type_list<ncarray::NCViewFor<MemTag>, ncarray::SOViewFor<MemTag>>;
 
     struct Params : public Parameters<Params> {
       // These are LCLS2-specific metadata parameters for fetching constants.
@@ -352,7 +355,9 @@ namespace xalgospp::det {
      * @param[in] input The uncalibrated raw data.
      * @param[out] output The array to hold the output calibrated data.
      */
-    void process_impl(const ncarray::SOViewFor<MemTag>& input, ncarray::SOViewFor<MemTag>& output) const {
+    template <typename InputArg, typename OutputArg>
+    requires (Input::template accepts<InputArg> && Output::template accepts<OutputArg>)
+    void process_impl(const InputArg& input, OutputArg& output) const {
       if constexpr (std::is_same_v<MemTag, ncarray::HostTag>) {
         if (m_constants.empty()) {
           throw std::runtime_error("[Calibration] Run-time error: Staging has not been run!");
@@ -422,6 +427,29 @@ namespace xalgospp::det {
 #else
         throw std::runtime_error("[Calibration] GPU execution requested but CUDA support is disabled!");
 #endif
+      }
+    }
+
+    /**
+     * Run processing on multiple inputs (though these are wrapped in one array).
+     *
+     * Currently, either compile-time or run-time based dispatch mechanisms are
+     * available; however, only the host-side routines are currently exposed.
+     *
+     * @param[in] count The number of independent inputs - the count should correspond
+     *            to the FIRST axis of the input array (and output array). However, it
+     *            does not need to equal the complete length of the dimension.
+     *            Processing will always start from the beginning of axis 0.
+     * @param[in] input The uncalibrated raw data.
+     * @param[out] output The array to hold the output calibrated data.
+     */
+    template <typename InputArg, typename OutputArg>
+    requires (Input::template accepts<InputArg> && Output::template accepts<OutputArg>)
+    void process_many_impl(std::size_t count,
+                           const InputArg& input,
+                           OutputArg& output) {
+      for (ssize_t i = 0; i < static_cast<ssize_t>(count) && i < input.shape(0); ++i) {
+        process(input(i), output(i));
       }
     }
 

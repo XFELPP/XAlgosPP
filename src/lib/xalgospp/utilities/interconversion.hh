@@ -20,6 +20,8 @@
 #ifndef XALGOSPP_UTILITIES_INTERCONVERSION_HH
 #define XALGOSPP_UTILITIES_INTERCONVERSION_HH
 
+#include "xalgospp/parameters.hh"
+
 #include <Eigen/Dense>
 #include <ncarray/dtype.hh>
 #include <ncarray/ncarrays.hh>
@@ -27,8 +29,14 @@
 
 #include <stdexcept>
 #include <string>
+#include <type_traits>
 
 namespace xalgospp {
+  namespace impl {
+    using HostArrayViewTypes =
+      type_list<ncarray::NCViewFor<ncarray::HostTag>, ncarray::SOViewFor<ncarray::HostTag>>;
+  };
+
   /**
    * Error indicating an unknown, unrecognized, or invalid type representation.
    */
@@ -54,15 +62,17 @@ namespace xalgospp {
   ncarray::DType string_to_dtype(const std::string& dtype_str);
 
   /**
-   * Convert an NCArrayView to an Eigen Map.
+   * Convert an NCArrayView or SOArrayView to an Eigen Map.
    *
    * @tparam T The underlying datatype of the array views.
+   * @tparam InputArg The NCArrayView or SOArrayView type.
    * @param view The NCArrayView to convert.
    * @returns An Eigen::Map over the NCArrayView's data.
    */
-  template <typename T>
+  template <typename T, typename InputArg>
+  requires (impl::HostArrayViewTypes::template accepts<InputArg>)
   inline Eigen::Map<Eigen::Array<T, Eigen::Dynamic, 1>>
-  to_eigen_array(const ncarray::SOArrayView& view) {
+  to_eigen_array(const InputArg& view) {
     return Eigen::Map<Eigen::Array<T, Eigen::Dynamic, 1>>(static_cast<T*>(view.data()),
                                                           view.size());
   }
