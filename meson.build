@@ -458,7 +458,7 @@ endif
 
 py_install_dir = py3.get_install_dir(pure: false)
 
-pyxalgospp_install_dir = py_install_dir / 'xalgospp/core'
+pyxalgospp_install_dir = py_install_dir / 'xalgospp'
 
 if xalg_as_wheel_opt
     # Install C++ libraries inside the wheel structure
@@ -468,16 +468,16 @@ if xalg_as_wheel_opt
     #           | - lib
     #           |    | - libxalgospp.so
     #           |
-    #           | - core
-    #           |    | - _pyxalgospp.so
+    #           | - detector.so
+    #           | - scheduling.so # ... etc.
     #           |
     #           | - __init__.py (utility functions and expose core lib)
 
     libxalgospp_install_dir = py_install_dir / 'xalgospp/lib'
     header_install_dir = py_install_dir / 'xalgospp/include'
 
-    # Relative path from 'xalgospp/core' to 'xalgospp/lib'
-    py_to_lib_path = '../lib'
+    # Relative path from 'xalgospp/' to 'xalgospp/lib'
+    py_to_lib_path = './lib'
 
     exe_prefix = py_install_dir
     lib_prefix = pyxalgospp_install_dir
@@ -486,8 +486,8 @@ else
     libxalgospp_install_dir = get_option('libdir')
     header_install_dir = get_option('includedir')
 
-    # Relative path from '$PREFIX/lib/pythonMAJ.MIN/site-packages/xalgospp/core' to '$PREFIX/lib'
-    py_to_lib_path = '../../../../'
+    # Relative path from '$PREFIX/lib/pythonMAJ.MIN/site-packages/xalgospp/' to '$PREFIX/lib'
+    py_to_lib_path = '../../../'
 
     exe_prefix = get_option('prefix') / 'bin'
     lib_prefix = pyxalgospp_install_dir

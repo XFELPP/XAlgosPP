@@ -47,12 +47,14 @@ namespace pyxalgospp::scheduling {
     void release_python_object() {
       py::gil_scoped_acquire acquire;
       m_py_obj = py::object();
+      if (m_data && !m_data.is_none()) {
+        m_data = py::object();
+      }
     }
 
     ~PyTask() override {
-      if (m_py_obj) {
-        py::gil_scoped_acquire acquire;
-        m_py_obj = py::object();
+      if (m_py_obj || m_data) {
+        release_python_object();
       }
     }
 
@@ -69,8 +71,30 @@ namespace pyxalgospp::scheduling {
       PYBIND11_OVERRIDE(bool, xalgospp::scheduling::Task, is_generator);
     }
 
+    py::object get_data() const {
+      py::gil_scoped_acquire acquire;
+      if (m_data && !m_data.is_none()) {
+        auto weak_mod = py::module_::import("weakref");
+
+        return weak_mod.attr("proxy")(m_data);
+      }
+      return py::none();
+    }
+    void set_data(py::object data) { m_data = data; }
+
+    py::object get_parent() const { return m_parent_obj; }
+    void set_parent(py::object task) {
+      py::gil_scoped_acquire acquire;
+      if (task && !task.is_none()) {
+        auto weak_mod = py::module_::import("weakref");
+        m_parent_obj = weak_mod.attr("proxy")(task);
+      }
+    }
+
   private:
     py::object m_py_obj;
+    py::object m_parent_obj;
+    py::object m_data;
   };
 } // namespace pyxalgospp::scheduling
 

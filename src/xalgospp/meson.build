@@ -5,5 +5,3 @@ if build_python_opt
         subdir: 'xalgospp',
     )
 endif # build_python_opt
-
-subdir('core')

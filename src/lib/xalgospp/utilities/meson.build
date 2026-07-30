@@ -2,6 +2,7 @@ installed_utilities_headers = [
     'dispatch.hh',
     'interconversion.hh',
     'mongodb.hh',
+    'type_lists.hh',
 ]
 
 if not xalg_as_wheel_opt and build_core_opt

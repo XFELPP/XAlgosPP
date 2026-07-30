@@ -189,7 +189,7 @@ int main(int argc, char* argv[]) {
     base_cfg.events_per_read = events_per_read;
     base_cfg.max_dgram_size = 0x4000000;
 
-    if (!ds.load_run(experiment, run_num, base_cfg)) {
+    if (!ds.load_run(base_cfg, experiment, run_num)) {
       std::cout << "[Main] Did not find any data streams for "
                 << experiment << " (run " << run_num << ")"
                 << std::endl;

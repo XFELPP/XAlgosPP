@@ -91,4 +91,5 @@ elif platform.system() == "Linux":
             except Exception:
                 pass
 
-from xalgospp.core._pyxalgospp import *
+from xalgospp.detector import *
+from xalgospp.scheduling import *
