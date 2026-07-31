@@ -53,5 +53,6 @@ else
 endif # not xalg_as_wheel_opt and build_core_opt
 
 subdir('detector')
+subdir('features')
 subdir('scheduling')
 subdir('utilities')
