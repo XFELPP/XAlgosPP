@@ -203,8 +203,8 @@ int main(int argc, char* argv[]) {
     std::map<std::uint32_t, std::string> segment_serial_nos;
     std::string detector_type = det.group_name();
 
-    using BrokerT = std::decay_t<decltype(*det.stream_brokers()[0])>;
-    using InvT = typename BrokerT::MetadataInventory;
+    using BrokerType = std::decay_t<decltype(*det.stream_brokers()[0])>;
+    using InvT = typename BrokerType::StreamMetadata;
 
     for (std::size_t i = 0; i < det.num_stream_brokers(); ++i) {
       auto& inv {

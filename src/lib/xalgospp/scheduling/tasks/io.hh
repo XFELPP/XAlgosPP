@@ -51,8 +51,8 @@ namespace xalgospp::scheduling {
 
   class DummyDataSource {
   public:
-    using DSTraits = DummyDSTraits;
-    using StepIdxType = typename DSTraits::StepIdxType;
+    using DataFormat = DummyDSTraits;
+    using StepIdxType = typename DataFormat::StepIdxType;
 
     DummyDataSource(std::size_t max_steps)
       : m_max_steps(max_steps)
@@ -62,7 +62,7 @@ namespace xalgospp::scheduling {
       std::size_t current { m_step.fetch_add(1, std::memory_order_relaxed) };
 
       if (current >= m_max_steps) {
-        return DSTraits::ExhaustedSentinel;
+        return DataFormat::ExhaustedSentinel;
       }
 
       return current;
@@ -134,7 +134,7 @@ namespace xalgospp::scheduling {
   template <class DataSource, class DataFetcher, class MemTag = ncarray::HostTag>
   class ReadImageTask : public Task {
   public:
-    using StepIdxType = typename DataSource::DSTraits::StepIdxType;
+    using StepIdxType = typename DataSource::DataFormat::StepIdxType;
 
     ReadImageTask(DataSource& ds,
                   DataFetcher& fetcher,
@@ -183,7 +183,7 @@ namespace xalgospp::scheduling {
   template <class DataSource, class DataFetcher, class MemTag = ncarray::HostTag>
   auto make_read_image_task(DataSource& ds,
                             DataFetcher&& fetcher,
-                            typename DataSource::DSTraits::StepIdxType idx) {
+                            typename DataSource::DataFormat::StepIdxType idx) {
     using FetcherT = std::decay_t<DataFetcher>;
 
     return
@@ -216,8 +216,8 @@ namespace xalgospp::scheduling {
   template <class DataSource, class MemTag = ncarray::HostTag>
   class IOGeneratorTask : public Task {
   public:
-    using DSTraits = typename DataSource::DSTraits;
-    using StepIdxType = typename DSTraits::StepIdxType;
+    using DataFormat = typename DataSource::DataFormat;
+    using StepIdxType = typename DataFormat::StepIdxType;
 
     template <typename TaskBuilder>
     IOGeneratorTask(DagScheduler& scheduler,
@@ -249,7 +249,7 @@ namespace xalgospp::scheduling {
     void execute() override {
       auto idx { m_ds.next() };
 
-      if (idx == DSTraits::ExhaustedSentinel) {
+      if (idx == DataFormat::ExhaustedSentinel) {
         return;
       }
 
