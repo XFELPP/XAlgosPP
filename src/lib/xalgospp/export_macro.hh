@@ -17,22 +17,21 @@
  * this program. If not, see <https://www.gnu.org/licenses/>.
  */
 
-#ifndef XALGOSPP_UTILITIES_MONGODB_HH
-#define XALGOSPP_UTILITIES_MONGODB_HH
+#ifndef XALGOSPP_EXPORT_MACRO_HH
+#define XALGOSPP_EXPORT_MACRO_HH
 
-#include "xalgospp/export_macro.hh"
+#ifdef _WIN32
 
-#include <cstdint>
-#include <string>
+#ifdef XALG_BUILD_API
+#define XALG_API __declspec(dllexport)
+#else
+#define XALG_API __declspec(dllimport)
+#endif // XALG_BUILD_API
 
-namespace xalgospp {
-  /**
-   * Return the timestamp from a MongoDB object ID.
-   *
-   * The timestamps from MongoDB are stored as a big-endian Unix timestamp.
-   * The first 4 bytes of the ID contain it.
-   */
-  XALG_API std::uint32_t timestamp_from_bson_object_id(std::string& oid);
-} // namespace xalgospp
+#else
 
-#endif // XALGOSPP_UTILITIES_MONGODB_HH
+#define XALG_API
+
+#endif // _WIN32
+
+#endif // XALGOSPP_EXPORT_MACRO_HH

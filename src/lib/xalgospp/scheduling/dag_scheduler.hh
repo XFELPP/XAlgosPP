@@ -20,6 +20,7 @@
 #ifndef XALGOSPP_SCHEDULING_DAG_SCHEDULER_HH
 #define XALGOSPP_SCHEDULING_DAG_SCHEDULER_HH
 
+#include "xalgospp/export_macro.hh"
 #include "xalgospp/scheduling/pool.hh"
 #include "xalgospp/scheduling/queue.hh"
 #include "xalgospp/scheduling/staging.hh"
@@ -171,7 +172,7 @@ namespace xalgospp::scheduling {
    * 7. From 5 and 6 calculate a limit based on memory bandiwdth.
    * 8. From 7, determine the remaining concurrency numbers.
    */
-  class DagScheduler {
+  class XALG_API DagScheduler {
   public:
     struct Config {
       /**

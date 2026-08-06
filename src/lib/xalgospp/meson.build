@@ -7,7 +7,7 @@ if build_core_opt
             'utilities/interconversion.cc',
             'utilities/mongodb.cc',
         ],
-        cpp_args: ['-DXALG_BUILD_XALGOSPP_API'],
+        cpp_args: ['-DXALG_BUILD_API'],
         dependencies: deps_for_xalgospp,
         include_directories: xalgospp_headers,
         install: true,
@@ -36,6 +36,7 @@ endif # end build_core_opt
 
 installed_headers = [
     'algorithm.hh',
+    'export_macro.hh',
     'parameters.hh',
 ]
 

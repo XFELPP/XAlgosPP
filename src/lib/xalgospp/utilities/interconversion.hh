@@ -20,6 +20,7 @@
 #ifndef XALGOSPP_UTILITIES_INTERCONVERSION_HH
 #define XALGOSPP_UTILITIES_INTERCONVERSION_HH
 
+#include "xalgospp/export_macro.hh"
 #include "xalgospp/parameters.hh"
 #include "xalgospp/utilities/type_lists.hh" // HostArrayViewTypes
 
@@ -55,7 +56,7 @@ namespace xalgospp {
    * @exception invalid_type_string Thrown if the dtype_str is an unrecognized type
    *            representation.
    */
-  ncarray::DType string_to_dtype(const std::string& dtype_str);
+  XALG_API ncarray::DType string_to_dtype(const std::string& dtype_str);
 
   /**
    * Convert an NCArrayView or SOArrayView to an Eigen Map.
