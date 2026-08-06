@@ -324,6 +324,40 @@ namespace xalgospp {
 
       return "UnnamedAlgorithm";
     }
+
+    /**
+     * Print the name and current values of the Algorithm's Parameters.
+     */
+    void print_configuration() const {
+      if constexpr (requires {
+          static_cast<const Derived*>(this)->print_configuration_impl();
+        }) {
+        static_cast<const Derived*>(this)->print_configuration_impl();
+      } else {
+        print_parameters(static_cast<const Derived*>(this)->params_impl());
+      }
+    }
+
+    /**
+     * Print the name and current values of the Algorithm's Parameters.
+     */
+    void print_configuration() {
+      if constexpr (requires { static_cast<Derived*>(this)->print_configuration_impl(); }) {
+        static_cast<Derived*>(this)->print_configuration_impl();
+      } else {
+        print_parameters(static_cast<Derived*>(this)->params_impl());
+      }
+    }
+
+    /**
+     * Retrieve the current Parameters for the Algorithm.
+     *
+     * @returns A const reference to the Parameters.
+     */
+    const auto& params() const {
+      return static_cast<const Derived*>(this)->params_impl();
+    }
+
   };
 } // namespace xalgospp
 
