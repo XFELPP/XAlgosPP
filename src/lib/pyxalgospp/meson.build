@@ -23,6 +23,20 @@ if build_python_opt
     )
 
     py_mod = py3.extension_module(
+        'features',
+        [
+            'features.cc',
+        ],
+        install: true,
+        install_dir: pyxalgospp_install_dir,
+        include_directories: xalgospp_headers,
+        dependencies : deps_for_py_mod,
+        install_rpath: py_to_lib_install_rpath,
+        build_rpath: py_to_lib_install_rpath,
+        # link_args: py_mod_link_args,
+    )
+
+    py_mod = py3.extension_module(
         'scheduling',
         [
             'scheduling.cc',

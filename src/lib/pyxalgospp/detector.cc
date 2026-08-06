@@ -17,8 +17,6 @@
  * this program. If not, see <https://www.gnu.org/licenses/>.
  */
 
-#include "pyxalgospp/scheduling.hh"
-
 #include "xalgospp/algorithm.hh"
 #include "xalgospp/detector/calibration.hh"
 #include "xalgospp/detector/lcls2/calibdb.hh"
