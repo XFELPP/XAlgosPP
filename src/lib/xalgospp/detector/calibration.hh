@@ -290,10 +290,6 @@ namespace xalgospp::det {
       : m_params(params)
     {}
 
-    void print_configuration() {
-      print_parameters(m_params);
-    }
-
     void configure_impl(const Params& params) { m_params = params; }
 
     /**
@@ -457,6 +453,8 @@ namespace xalgospp::det {
     }
 
     const char* name_impl() const { return "Calibration"; }
+
+    const Params& params_impl() const { return m_params; }
 
     /**
      * Retrieve a pointer to the calibration constants.

@@ -1,14 +1,16 @@
 project(
     'xalgospp',
+    'c',
     'cpp',
     version: '0.1.0',
     default_options: [
+        'c_std=c17',
         'cpp_std=c++23,c++latest',
         'cuda_std=c++20',
         'optimization=3',
     ],
 )
-add_languages('cpp', native: true, required: true)
+add_languages('c', 'cpp', native: true, required: true)
 xalg_has_cuda = add_languages('cuda', required: false)
 
 if xalg_has_cuda
@@ -253,7 +255,11 @@ else
     found_mpi = false
     bundle_mpi = false # Only bundle if using subproject
     if try_sys
-        mpi_dep = dependency('mpi', language: 'cpp', required: false)
+        if host_machine.system() == 'windows'
+            mpi_dep = dependency('mpi', language: 'c', required: false)
+        else
+            mpi_dep = dependency('mpi', required: false)
+        endif
         if mpi_dep.found()
             found_mpi = true
         endif
@@ -301,11 +307,27 @@ if libncarray.found()
     ncarray_dep = libncarray
 else
     message('ncarray not found via `find_library` - checking via Python')
+    nc_libs_cmd = '''
+import glob
+import os
+from typing import List, Set
+
+import ncarray
+
+d: str = ncarray.get_lib_dir()
+files: Set[str] = set(glob.glob(os.path.join(d, "*")))
+libs: List[str] = [f for f in files if f.endswith((".so", ".dylib", ".dll", ".lib")) or ".so." in f]
+
+if any(f.endswith(".lib") for f in libs):
+    libs = [f for f in libs if not f.endswith(".dll")]
+print(";".join(libs).replace("\r", ""))
+'''
+
     nc_libs_raw = run_command(
         py3, '-c',
-        'import glob, ncarray; print("\\n".join(glob.glob(f"{ncarray.get_lib_dir()}/libnc*")))',
+        nc_libs_cmd,
         check: false,
-    ).stdout().strip().split('\n')
+    ).stdout().strip().split(';')
 
     if (nc_libs_raw.length() == 0) or (nc_libs_raw.length() == 1  and nc_libs_raw[0] == '')
         message('ncarray not found via Python - will use subproject.')
@@ -315,12 +337,13 @@ else
         fs = import('fs')
         nc_link_args = []
         foreach lib : nc_libs_raw
-            libdir = fs.parent(lib)
-            libname = fs.name(lib)
-            nc_link_args += [
-                '-L' + libdir,
-                '-l:' + libname,
-            ]
+            if lib != ''
+                if 'libpython' in lib or lib.endswith('/Python')
+                    message('Skipping ' + lib + ' from ncarray list. Causes problem on macOS!')
+                else
+                    nc_link_args += [lib]
+                endif # macOS Python wheel repair guard.....
+            endif
         endforeach
 
         nc_inc = run_command(
@@ -375,20 +398,29 @@ if libsbio.found()
     )
 else
     message('sbio not found via `find_library` - checking via Python')
+    sbio_libs_cmd = '''
+import glob
+import os
+from typing import List, Set
 
-    # Construct an OR to look for optional components set(*sbio*) | set(*xtc*)
-    py_cmd_import_stmt = 'import glob, sbio; ' # Note the space at end
-    py_cmd_glob_sbio_stmt = 'set(glob.glob(f"{sbio.get_lib_dir()}/lib*sbio*"))'
-    py_cmd_glob_xtcs_stmt = 'set(glob.glob(f"{sbio.get_lib_dir()}/lib*xtc*"))'
-    py_sbio_libs_globs = py_cmd_glob_sbio_stmt + ' | ' + py_cmd_glob_xtcs_stmt
-    py_glob_cmd = py_cmd_import_stmt + 'print("\\n".join(' + py_sbio_libs_globs + '))'
+import sbio
+
+d: str = sbio.get_lib_dir()
+files: Set[str] = set(glob.glob(os.path.join(d, "*")))
+libs: List[str] = [f for f in files if f.endswith((".so", ".dylib", ".dll", ".lib")) or ".so." in f]
+
+if any(f.endswith(".lib") for f in libs):
+    libs = [f for f in libs if not f.endswith(".dll")]
+print(";".join(libs).replace("\r", ""))
+'''
 
     sbio_libs_raw = run_command(
-        py3, '-c', py_glob_cmd,
+        py3, '-c',
+        sbio_libs_cmd,
         check: false,
-    ).stdout().strip().split('\n')
+    ).stdout().strip().split(';')
 
-    if (sbio_libs_raw.length() == 0) or (sbio_libs_raw.length() == 1  and sbio_libs_raw[0] == '')
+    if (sbio_libs_raw.length() == 0) or (sbio_libs_raw.length() == 1 and sbio_libs_raw[0] == '')
         message('sbio not found via Python - will use subproject.')
         sbio_proj = subproject('sbio')
         sbio_dep = sbio_proj.get_variable('sbio_dep')
@@ -405,22 +437,21 @@ else
         fs = import('fs')
         sbio_link_args = []
         foreach lib : sbio_libs_raw
-            libdir = fs.parent(lib)
-            libname = fs.name(lib)
+            if lib != ''
+                if 'libpython' in lib or lib.endswith('/Python')
+                    message('Skipping ' + lib + ' from sbio list. Causes problem on macOS!')
+                else
+                    libname = fs.name(lib)
+                    if libname.contains('xtc1')
+                        add_project_arguments('-DSBIO_HAS_XTC1', language: ['cpp', 'cuda'])
+                    endif
 
-            # Enable the correct macros as needed
-            if libname.contains('xtc1')
-                add_project_arguments('-DSBIO_HAS_XTC1', language: ['cpp', 'cuda'])
+                    if libname.contains('xtc2')
+                        add_project_arguments('-DSBIO_HAS_XTC2', language: ['cpp', 'cuda'])
+                    endif   
+                    sbio_link_args += [lib]
+                endif # macOS Python wheel repair guard.....
             endif
-
-            if libname.contains('xtc2')
-                add_project_arguments('-DSBIO_HAS_XTC2', language: ['cpp', 'cuda'])
-            endif
-
-            sbio_link_args += [
-                '-L' + libdir,
-                '-l:' + libname,
-            ]
         endforeach
 
         sbio_inc = run_command(
@@ -436,11 +467,21 @@ else
 endif
 deps_for_xalgospp += sbio_dep
 
-spdlog_dep = dependency('spdlog', required: false)
-if not spdlog_dep.found()
-    message('spdlog not found - using subproject')
-    spdlog_proj = subproject('spdlog')
+if host_machine.system() == 'darwin'
+    # macOS CI is the worst. Fails in all psosible configurations
+    # BUILD ONLY WITH SUBPROJECT, STATIC ONLY, DONT ALLOW ANYTHING TO BE PULLED BY HOMEBREW
+    fmt_proj = subproject('fmt', default_options: ['default_library=static'])
+    fmt_dep = fmt_proj.get_variable('fmt_dep')
+    deps_for_xalgospp += fmt_dep
+    spdlog_proj = subproject('spdlog', default_options: ['default_library=static'])
     spdlog_dep = spdlog_proj.get_variable('spdlog_dep')
+else
+    spdlog_dep = dependency('spdlog', required: false, static: true)
+    if not spdlog_dep.found()
+        message('spdlog not found - using subproject')
+        spdlog_proj = subproject('spdlog', default_options: ['default_library=static'])
+        spdlog_dep = spdlog_proj.get_variable('spdlog_dep')
+    endif
 endif
 deps_for_xalgospp += spdlog_dep
 

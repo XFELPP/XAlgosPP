@@ -21,9 +21,12 @@ configure_opts = [
     '--disable-cxx',
     '--enable-shared',
     '--disable-static',
-    'CC=' + cc.cmd_array()[-1],
-    'CXX=' + cxx.cmd_array()[-1],
+    'CC=' + ' '.join(cc.cmd_array()),
+    'CXX=' + ' '.join(cxx.cmd_array()),
 ]
+
+# musl fails ....
+is_musl = not cc.has_header('gnu/libc-version.h')
 
 ucx_dep = dependency('ucx', required: false)
 if ucx_dep.found()
@@ -33,11 +36,18 @@ if ucx_dep.found()
         '--with-ucx=auto',
     ]
 else
-    message('UCX not found. Configuring MPICH with OFI (libfabric) netmod (supports TCP + Shared Memory).')
-    configure_opts += [
-        '--with-device=ch4:ofi',
-        '--with-libfabric=embedded',
-    ]
+    if is_musl
+        message('musl detected - using ch3:nemesis due to libfabric failure.')
+        configure_opts += [
+            '--with-device=ch3:nemesis',
+        ]
+    else
+        message('UCX not found. Configuring MPICH with OFI (libfabric) netmod (supports TCP + Shared Memory).')
+        configure_opts += [
+            '--with-device=ch4:ofi',
+            '--with-libfabric=embedded',
+        ]
+    endif # is_musl
 endif
 
 # Ugh... it has problems finding CUDA on its own....
