@@ -91,5 +91,18 @@ elif platform.system() == "Linux":
             except Exception:
                 pass
 
+# While the XAlgosPP modules import ncarray, and sbio -- it's too late to avoid link
+# issues The loader will search for the ncarray libs before. So must import ncarray
+# and sbio here, before import of the XAlgosPP modules
+try:
+    import ncarray
+    import sbio
+except Exception:
+    raise RuntimeError(
+        "`XAlgosPP` requires ncarray and sbio to use! Must install ncarray and sbio before proceeding!"
+    )
+
+
 from xalgospp.detector import *
+from xalgospp.features import *
 from xalgospp.scheduling import *

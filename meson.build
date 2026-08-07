@@ -209,7 +209,9 @@ cpp_httplib_dep = dependency('cpp-httplib', required: false)
 if not cpp_httplib_dep.found()
     message('cpp-httplib not found - using subproject')
     # cpp-httplib deps:
-    brotli_proj = subproject('google-brotli')
+    # Since we added C to support Windows MPI, strict C17 causes issues with brotli CLI
+    # We don't need the command line tool. Only need the libs, so just disable that.
+    brotli_proj = subproject('google-brotli', default_options: ['brotli-cli=disabled'])
     zlib_proj = subproject('zlib')
 
     # Now build
