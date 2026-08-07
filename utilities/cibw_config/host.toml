@@ -49,7 +49,7 @@ before-all = [
     mkdir install
     /opt/python/cp310-cp310/bin/pip install meson ninja
     /opt/python/cp310-cp310/bin/python -m pip install "ncarray==0.7.3+host" --extra-index-url https://pypi.xfelpp.org/host/ || true
-    /opt/python/cp310-cp310/bin/python -m pip install "sbio==0.1.1+host" --extra-index-url https://pypi.xfelpp.org/host/ || true
+    /opt/python/cp310-cp310/bin/python -m pip install "sbio==0.1.2+host" --extra-index-url https://pypi.xfelpp.org/host/ || true
     export PATH="/usr/lib64/openmpi/bin:/opt/python/cp310-cp310/bin:$PATH"
     meson setup builddir -Dbuild_core=true -Dbuild_python=false -Dxalg_as_wheel=false -Dbuild_mpi=mpich --prefix={project}/install
     # Temp musl debugging...
@@ -61,7 +61,7 @@ before-build = [
     "python -m pip install -U pip",
     "python -m pip install \"meson>=1.10.1\" meson-python ninja \"pybind11[global]\" setuptools cmake delvewheel",
     "python -m pip install --break-system-packages \"ncarray==0.7.3+host\" --extra-index-url https://pypi.xfelpp.org/host/",
-    "python -m pip install --break-system-packages \"sbio==0.1.1+host\" --extra-index-url https://pypi.xfelpp.org/host/",
+    "python -m pip install --break-system-packages \"sbio==0.1.2+host\" --extra-index-url https://pypi.xfelpp.org/host/",
 ]
 
 repair-wheel-command = "python utilities/repair_wheel.py {wheel} {dest_dir} --no-exclude-core"
@@ -82,7 +82,7 @@ export PATH="$HOME/Library/Python/3.10/bin:/opt/homebrew/opt/python@3.10/bin:$PA
 export PYTHONPATH="$HOME/Library/Python/3.10/lib/python/site-packages:/opt/homebrew/lib/python3.10/site-packages:$PYTHONPATH"
 export PYTHON="/opt/homebrew/opt/python@3.10/bin/python3.10"
 ccache -z
-python3.10 -m pip install --break-system-packages meson ninja "ncarray==0.7.3+host" "sbio==0.1.1+host" --extra-index-url https://pypi.xfelpp.org/host/ || true
+python3.10 -m pip install --break-system-packages meson ninja "ncarray==0.7.3+host" "sbio==0.1.2+host" --extra-index-url https://pypi.xfelpp.org/host/ || true
 meson setup builddir -Dbuild_core=true -Dbuild_python=false -Dxalg_as_wheel=false -Dbuild_mpi=mpich --prefix=$(pwd)/install
 meson compile -j 6 -C builddir
 meson install -C builddir
@@ -94,7 +94,7 @@ before-build = [
     # Despite cibuildwheel creating a macosx_11_0_arm64 wheel for ncarray. It cannot
     # download it with pip.
     "python -m pip install --break-system-packages \"ncarray==0.7.3+host\" --extra-index-url https://pypi.xfelpp.org/host/ --platform macosx_11_0_arm64 --only-binary :all: --target \"$(python -c 'import site; print(site.getsitepackages()[0])')\"",
-    "python -m pip install --break-system-packages \"sbio==0.1.1+host\" --extra-index-url https://pypi.xfelpp.org/host/ --platform macosx_11_0_arm64 --only-binary :all: --target \"$(python -c 'import site; print(site.getsitepackages()[0])')\"",
+    "python -m pip install --break-system-packages \"sbio==0.1.2+host\" --extra-index-url https://pypi.xfelpp.org/host/ --platform macosx_11_0_arm64 --only-binary :all: --target \"$(python -c 'import site; print(site.getsitepackages()[0])')\"",
 ]
 
 [tool.cibuildwheel.macos.environment]
@@ -128,7 +128,7 @@ before-build = [
     "python -m pip install -U pip",
     "python -m pip install \"meson>=1.10.1\" meson-python ninja \"pybind11[global]\" setuptools cmake delvewheel",
     "python -m pip install --break-system-packages \"ncarray==0.7.3+host\" --extra-index-url https://pypi.xfelpp.org/host/",
-    "python -m pip install --break-system-packages \"sbio==0.1.1+host\" --extra-index-url https://pypi.xfelpp.org/host/",
+    "python -m pip install --break-system-packages \"sbio==0.1.2+host\" --extra-index-url https://pypi.xfelpp.org/host/",
 ]
 repair-wheel-command = "python utilities/repair_wheel_win.py {dest_dir} {wheel} --no-exclude-core"
 

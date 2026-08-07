@@ -9,7 +9,7 @@ requires-python = ">=3.8"
 dynamic = ["version"]
 dependencies = [
     "ncarray>=0.7.3",
-    "sbio>=0.1.1",
+    "sbio>=0.1.2",
 ]
 authors = [
     { name = "Gabriel Dorlhiac", email = "gabriel@dorlhiac.com" },
