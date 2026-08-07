@@ -40,7 +40,12 @@ typedef SSIZE_T ssize_t;
 #include <map>
 #include <optional>
 #include <set>
+#if defined(__linux__)
+// NOTE: Windows MSVC doesnt implement fixed-width floats yet....
+//       The header is includable as a stub, I think. But no point including it.
+// NOTE: Apparently the header doesn't exist on mac at all.
 #include <stdfloat>
+#endif // linux
 #include <string>
 #include <utility>
 #include <vector>
@@ -119,15 +124,29 @@ namespace xalgospp::lcls2 {
 
     std::size_t nbytes { 0 };
     // Floats are most likely, really float32 and float64. Leave the rest in case
+    // NOTE: Windows MSVC doesnt implement fixed-width floats yet....
+    // NOTE: mac doesn't even have the header.
     if (data_dtype == "float16" || data_dtype == "half") {
       logger->debug("[LCLS2][{}] Getting {} float16 values", log_id, data_nelem);
+#if defined(__linux__)
       nbytes = data_nelem * sizeof(std::float16_t);
+#else
+      nbytes = data_nelem * 2;
+#endif // linux
     } else if (data_dtype == "float32") {
       logger->debug("[LCLS2][{}] Getting {} float32 values", log_id, data_nelem);
+#if defined(__linux__)
       nbytes = data_nelem * sizeof(std::float32_t);
+#else
+      nbytes = data_nelem * 4;
+#endif // linux
     } else if (data_dtype == "float64") {
       logger->debug("[LCLS2][{}] Getting {} float64 values", log_id, data_nelem);
+#if defined(__linux__)
       nbytes = data_nelem * sizeof(std::float64_t);
+#else
+      nbytes = data_nelem * 8;
+#endif // linux
     } else if (data_dtype == "float96" || data_dtype == "float128" ||
                data_dtype == "longdouble") {
       std::size_t real_size{sizeof(long double)};
@@ -168,10 +187,18 @@ namespace xalgospp::lcls2 {
 
     } else if (data_dtype == "complex64" || data_dtype == "csingle") {
       logger->debug("[LCLS2][{}] Getting {} complex64 values", log_id, data_nelem);
+#if defined(__linux__)
       nbytes = data_nelem * sizeof(std::float32_t) * 2;
+#else
+      nbytes = data_nelem * 4 * 2;
+#endif // linux
     } else if (data_dtype == "complex128" || data_dtype == "cdouble") {
       logger->debug("[LCLS2][{}] Getting {} complex128 values", log_id, data_nelem);
+#if defined(__linux__)
       nbytes = data_nelem * sizeof(std::float64_t) * 2;
+#else
+      nbytes = data_nelem * 8 * 2;
+#endif  // linux
     } else if (data_dtype == "complex192" ||
                data_dtype == "complex256" ||
                data_dtype == "clongdouble") {

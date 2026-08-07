@@ -24,6 +24,22 @@ def main():
     lib_dir: str = os.path.normpath(os.path.join(root_dir, "install", "lib"))
 
     delvewheel_cmd: List[str] = ["delvewheel", "repair"]
+    delvewheel_cmd.extend(
+        [
+            "--no-dll",
+            "ncarray-1.dll",
+            "--no-dll",
+            "ncdevarray-1.dll",
+            "--no-dll",
+            "ncarrayjit-1.dll",
+            "--no-dll",
+            "sbio-1.dll",
+            "--no-dll",
+            "xtc1slim-1.dll",
+            "--no-dll",
+            "xtc2slim-1.dll",
+        ]
+    )
     if not no_exclude_core:
         delvewheel_cmd.extend(
             [
@@ -35,10 +51,13 @@ def main():
     delvewheel_search_path: str = f"{lib_dir};{bin_dir}"
     try:
         import ncarray
+
         nc_dir: str = ncarray.get_lib_dir()
         root: str = os.path.dirname(nc_dir)
 
-        nc_dlls: List[str] = glob.glob(os.path.join(root, "**", "*.dll"), recursive=True)
+        nc_dlls: List[str] = glob.glob(
+            os.path.join(root, "**", "*.dll"), recursive=True
+        )
         nc_dirs: List[str] = list(set(os.path.dirname(p) for p in nc_dlls))
         if os.path.exists(nc_dir):
             nc_dirs.append(nc_dir)
@@ -50,10 +69,13 @@ def main():
 
     try:
         import sbio
+
         sbio_dir: str = sbio.get_lib_dir()
         sb_root: str = os.path.dirname(sbio_dir)
 
-        sbio_dlls: List[str] = glob.glob(os.path.join(sb_root, "**", "*.dll"), recursive=True)
+        sbio_dlls: List[str] = glob.glob(
+            os.path.join(sb_root, "**", "*.dll"), recursive=True
+        )
         sbio_dirs: List[str] = list(set(os.path.dirname(p) for p in sbio_dlls))
         if os.path.exists(sbio_dir):
             sbio_dirs.append(sbio_dir)

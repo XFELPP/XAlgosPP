@@ -29,11 +29,37 @@ def main():
         for name in z.namelist():
             if name.endswith(".so") or ".so." in name:
                 content = z.read(name)
-                for lib in set(re.findall(rb"libncarray[a-zA-Z0-9_\-]*\.so[0-9\.]*", content)):
+                for lib in set(
+                    re.findall(rb"libncarray[a-zA-Z0-9_\-]*\.so[0-9\.]*", content)
+                ):
                     cmd.extend(["--exclude", lib.decode("utf-8")])
-                for lib in set(re.findall(rb"lib(?:gcc_s|stdc\+\+|gomp)[a-zA-Z0-9_\-]*\.so[0-9\.]*", content)):
+                for lib in set(
+                    re.findall(rb"libncdevarray[a-zA-Z0-9_\-]*\.so[0-9\.]*", content)
+                ):
                     cmd.extend(["--exclude", lib.decode("utf-8")])
-
+                for lib in set(
+                    re.findall(rb"libmpi[a-zA-Z0-9_\-]*\.so[0-9\.]*", content)
+                ):
+                    cmd.extend(["--exclude", lib.decode("utf-8")])
+                for lib in set(
+                    re.findall(rb"libpciaccess[a-zA-Z0-9_\-]*\.so[0-9\.]*", content)
+                ):
+                    cmd.extend(["--exclude", lib.decode("utf-8")])
+                for lib in set(
+                    re.findall(rb"libsbio[a-zA-Z0-9_\-]*\.so[0-9\.]*", content)
+                ):
+                    cmd.extend(["--exclude", lib.decode("utf-8")])
+                for lib in set(
+                    re.findall(rb"libxtc[a-zA-Z0-9_\-]*\.so[0-9\.]*", content)
+                ):
+                    cmd.extend(["--exclude", lib.decode("utf-8")])
+                for lib in set(
+                    re.findall(
+                        rb"lib(?:gcc_s|stdc\+\+|gomp)[a-zA-Z0-9_\-]*\.so[0-9\.]*",
+                        content,
+                    )
+                ):
+                    cmd.extend(["--exclude", lib.decode("utf-8")])
 
     if not no_exclude_core:
         cmd.extend(

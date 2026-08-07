@@ -210,16 +210,10 @@ if not cpp_httplib_dep.found()
     message('cpp-httplib not found - using subproject')
     # cpp-httplib deps:
     # Since we added C to support Windows MPI, strict C17 causes issues with brotli CLI
-    brotli_c_args = []
-    if host_machine.system() == 'windows'
-        brotli_c_args += ['-D_CRT_NONSTDC_NO_WARNINGS', '-D_CRT_SECURE_NO_WARNINGS']
-    else
-        brotli_c_args += ['-D_GNU_SOURCE', '-D_DEFAULT_SOURCE', '-D_POSIX_C_SOURCE=200809L']
+    if host_machine.system() != 'windows'
+        add_global_arguments('-D_GNU_SOURCE', language: 'c')
     endif
-    brotli_proj = subproject(
-        'google-brotli', 
-        default_options: ['c_args=' + ';'.join(brotli_c_args)]
-    )
+    brotli_proj = subproject('google-brotli')
     zlib_proj = subproject('zlib')
 
     # Now build
@@ -329,7 +323,7 @@ files: Set[str] = set(glob.glob(os.path.join(d, "*")))
 libs: List[str] = [f for f in files if f.endswith((".so", ".dylib", ".dll", ".lib")) or ".so." in f]
 
 if any(f.endswith(".lib") for f in libs):
-    libs = [f for f in libs if not f.endswith(".dll")]
+    libs = [f for f in libs if f.endswith(".lib")]
 print(";".join(libs).replace("\r", ""))
 '''
 
@@ -351,7 +345,9 @@ print(";".join(libs).replace("\r", ""))
                 if 'libpython' in lib or lib.endswith('/Python')
                     message('Skipping ' + lib + ' from ncarray list. Causes problem on macOS!')
                 else
-                    nc_link_args += [lib]
+                    if not lib.endswith('.dll') # Windows guard....
+                        nc_link_args += [lib]
+                    endif
                 endif # macOS Python wheel repair guard.....
             endif
         endforeach
@@ -409,9 +405,20 @@ if libsbio.found()
 else
     message('sbio not found via `find_library` - checking via Python')
     sbio_libs_cmd = '''
+import ctypes
 import glob
 import os
+import platform
 from typing import List, Set
+
+if platform.system() == "Darwin":
+    try:
+        import ctypes.util
+        mpi_lib = ctypes.util.find_library("mpi")
+        if mpi_lib:
+            ctypes.CDLL(mpi_lib, mode=ctypes.RTLD_GLOBAL)
+    except Exception:
+        pass
 
 import sbio
 
@@ -420,15 +427,19 @@ files: Set[str] = set(glob.glob(os.path.join(d, "*")))
 libs: List[str] = [f for f in files if f.endswith((".so", ".dylib", ".dll", ".lib")) or ".so." in f]
 
 if any(f.endswith(".lib") for f in libs):
-    libs = [f for f in libs if not f.endswith(".dll")]
+    libs = [f for f in libs if f.endswith(".lib")]
 print(";".join(libs).replace("\r", ""))
 '''
 
-    sbio_libs_raw = run_command(
+    sbio_cmd_res = run_command(
         py3, '-c',
         sbio_libs_cmd,
         check: false,
-    ).stdout().strip().split(';')
+    )
+    message('SBIO CMD STDOUT: ' + sbio_cmd_res.stdout())
+    message('SBIO CMD STDERR: ' + sbio_cmd_res.stderr())
+    message('SBIO CMD RETURNCODE: ' + sbio_cmd_res.returncode().to_string())
+    sbio_libs_raw = sbio_cmd_res.stdout().strip().split(';')
 
     if (sbio_libs_raw.length() == 0) or (sbio_libs_raw.length() == 1 and sbio_libs_raw[0] == '')
         message('sbio not found via Python - will use subproject.')
@@ -458,8 +469,10 @@ print(";".join(libs).replace("\r", ""))
 
                     if libname.contains('xtc2')
                         add_project_arguments('-DSBIO_HAS_XTC2', language: ['cpp', 'cuda'])
-                    endif   
-                    sbio_link_args += [lib]
+                    endif
+                    if not lib.endswith('.dll') # Windows guard....
+                        sbio_link_args += [lib]
+                    endif
                 endif # macOS Python wheel repair guard.....
             endif
         endforeach
