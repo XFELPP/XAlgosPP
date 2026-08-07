@@ -41,15 +41,27 @@ def get_lib_dir() -> str:
     py_package_dir: str = os.path.dirname(__file__)
 
     # Check full-wheel path first: site-packages/xalgospp/lib
-    nca_wheel_lib_dir: str = os.path.join(py_package_dir, "lib")
-    if os.path.exists(nca_wheel_lib_dir):
-        return nca_wheel_lib_dir
+    xalg_wheel_lib_dir: str = os.path.join(py_package_dir, "lib")
+    if os.path.exists(xalg_wheel_lib_dir):
+        return xalg_wheel_lib_dir
+
+    # Check split-wheel: site-packages/xalgospp/.dylibs
+    #                    site-packages/xalgospp/.libs
+    xalg_wheel_dot_dylibs_dir: str = os.path.join(py_package_dir, ".dylibs")
+    if os.path.exists(xalg_wheel_dot_dylibs_dir):
+        return xalg_wheel_dot_dylibs_dir
+
+    xalg_wheel_dot_libs_dir: str = os.path.join(py_package_dir, ".libs")
+    if os.path.exists(xalg_wheel_dot_libs_dir):
+        return xalg_wheel_dot_libs_dir
 
     # Check split-wheel: site-packages/xalgospp/libxalgospp.so
     #                    site-packages/xalgospp.libs/libxalgospp.so
     parent_dir: str = os.path.dirname(py_package_dir)
     for folder in os.listdir(parent_dir):
-        if "xalgospp" in folder and folder != os.path.basename(py_package_dir):
+        if (
+            "xalgospp" in folder or "dylib" in folder or "lib" in folder
+        ) and folder != os.path.basename(py_package_dir):
             libs_dir: str = os.path.join(parent_dir, folder)
             if not os.path.isdir(libs_dir):
                 continue

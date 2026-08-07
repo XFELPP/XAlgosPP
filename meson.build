@@ -327,11 +327,15 @@ if any(f.endswith(".lib") for f in libs):
 print(";".join(libs).replace("\r", ""))
 '''
 
-    nc_libs_raw = run_command(
-        py3, '-c',
-        nc_libs_cmd,
+    nc_cmd_res = run_command(
+        py3, '-c', nc_libs_cmd,
         check: false,
-    ).stdout().strip().split(';')
+    )
+    message('NCArray Python Lib Search RETURNCODE: ' + nc_cmd_res.returncode().to_string())
+    message('NCArray Python Lib Search STDOUT: ' + nc_cmd_res.stdout())
+    message('NCArray Python Lib Search STDERR: ' + nc_cmd_res.stdout())
+
+    nc_libs_raw = nc_cmd_res.stdout().strip().split(';')
 
     if (nc_libs_raw.length() == 0) or (nc_libs_raw.length() == 1  and nc_libs_raw[0] == '')
         message('ncarray not found via Python - will use subproject.')
@@ -352,10 +356,17 @@ print(";".join(libs).replace("\r", ""))
             endif
         endforeach
 
-        nc_inc = run_command(
+
+        nc_inc_cmd_res = run_command(
             py3, '-c', 'import ncarray; print(ncarray.get_include())',
             check: false,
-        ).stdout().strip()
+        )
+
+        message('NCArray Python Include Search RETURNCODE: ' + nc_inc_cmd_res.returncode().to_string())
+        message('NCArray Python Include Search STDOUT: ' + nc_inc_cmd_res.stdout())
+        message('NCArray Python Include Search STDERR: ' + nc_inc_cmd_res.stdout())
+
+        nc_inc = nc_inc_cmd_res.stdout().strip()
 
         ncarray_dep = declare_dependency(
             link_args: nc_link_args,
@@ -436,9 +447,10 @@ print(";".join(libs).replace("\r", ""))
         sbio_libs_cmd,
         check: false,
     )
-    message('SBIO CMD STDOUT: ' + sbio_cmd_res.stdout())
-    message('SBIO CMD STDERR: ' + sbio_cmd_res.stderr())
-    message('SBIO CMD RETURNCODE: ' + sbio_cmd_res.returncode().to_string())
+    message('SBIO Python Lib Search RETURNCODE: ' + sbio_cmd_res.returncode().to_string())
+    message('SBIO Python Lib Search STDOUT: ' + sbio_cmd_res.stdout())
+    message('SBIO Python Lib Search STDERR: ' + sbio_cmd_res.stderr())
+
     sbio_libs_raw = sbio_cmd_res.stdout().strip().split(';')
 
     if (sbio_libs_raw.length() == 0) or (sbio_libs_raw.length() == 1 and sbio_libs_raw[0] == '')
@@ -477,10 +489,16 @@ print(";".join(libs).replace("\r", ""))
             endif
         endforeach
 
-        sbio_inc = run_command(
+        sbio_inc_cmd_res = run_command(
             py3, '-c', 'import sbio; print(sbio.get_include())',
             check: false,
-        ).stdout().strip()
+        )
+
+        message('SBIO Python Include Search RETURNCODE: ' + sbio_inc_cmd_res.returncode().to_string())
+        message('SBIO Python Include Search STDOUT: ' + sbio_inc_cmd_res.stdout())
+        message('SBIO Python Include Search STDERR: ' + sbio_inc_cmd_res.stdout())
+
+        sbio_inc = sbio_inc_cmd_res.stdout().strip()
 
         sbio_dep = declare_dependency(
             link_args: sbio_link_args,
