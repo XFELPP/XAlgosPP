@@ -60,6 +60,14 @@ namespace xalgospp::features::impl {
    * background signal (done in radial segments) during peak finding algorithms.
    */
   struct XALG_API RadialStatistics {
+    RadialStatistics() = default;
+
+    RadialStatistics(const RadialStatistics& other) = default;
+    RadialStatistics(RadialStatistics&& other) noexcept = default;
+
+    RadialStatistics& operator=(const RadialStatistics& other) = default;
+    RadialStatistics& operator=(RadialStatistics&& other) noexcept = default;
+
     RadialStatistics(int nbins)
       : offset(nbins, 0.0f)
       , sigma(nbins, 0.0f)

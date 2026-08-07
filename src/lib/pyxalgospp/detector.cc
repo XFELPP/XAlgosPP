@@ -68,7 +68,8 @@ PYBIND11_MODULE(detector, detector_module) {
            self.configure(params);
          },
          py::arg("params"))
-    .def("print_configuration", &RtCalibration::print_configuration)
+    .def("print_configuration",
+         py::overload_cast<>(&RtCalibration::print_configuration, py::const_))
     .def("stage", [](RtCalibration& self) { self.stage(); })
     .def("process",
          [](const RtCalibration& self,

@@ -134,7 +134,7 @@ namespace xalgospp {
 
           return
             hd_std::is_same_v<hd_std::decay_t<Other>, hd_std::decay_t<ExpectedOther>> ||
-            hd_std::is_convertible_v<hd_std::decay_t<Other>, hd_std::decay_t<Other>>;
+            hd_std::is_convertible_v<hd_std::decay_t<Other>, hd_std::decay_t<ExpectedOther>>;
         }
       }
     }();

@@ -35,6 +35,12 @@ namespace xalgospp::features::impl {
   struct XALG_API DevImageData {
     DevImageData() = default;
 
+    DevImageData(const DevImageData& other) = default;
+    DevImageData(DevImageData&& other) noexcept = default;
+
+    DevImageData& operator=(const DevImageData& other) = default;
+    DevImageData& operator=(DevImageData&& other) noexcept = default;
+
     DevImageData(int npixels)
       : num_pixels(npixels)
     {
@@ -68,6 +74,12 @@ namespace xalgospp::features::impl {
    */
   struct XALG_API DevRadialStatistics {
     DevRadialStatistics() = default;
+
+    DevRadialStatistics(const DevRadialStatistics& other) = default;
+    DevRadialStatistics(DevRadialStatistics&& other) noexcept = default;
+
+    DevRadialStatistics& operator=(const DevRadialStatistics& other) = default;
+    DevRadialStatistics& operator=(DevRadialStatistics&& other) noexcept = default;
 
     DevRadialStatistics(int nbins)
       : num_bins(nbins)
@@ -145,6 +157,12 @@ namespace xalgospp::features::impl {
    */
   struct XALG_API DevPeakLabelData {
     DevPeakLabelData() = default;
+
+    DevPeakLabelData(const DevPeakLabelData& other) = default;
+    DevPeakLabelData(DevPeakLabelData&& other) noexcept = default;
+
+    DevPeakLabelData& operator=(const DevPeakLabelData& other) = default;
+    DevPeakLabelData& operator=(DevPeakLabelData&& other) noexcept = default;
 
     DevPeakLabelData(int npixels)
       : num_pixels(npixels)

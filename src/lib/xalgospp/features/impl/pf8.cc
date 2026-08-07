@@ -17,9 +17,6 @@
  * this program. If not, see <https://www.gnu.org/licenses/>.
  */
 
-#ifndef XALGOSPP_FEATURES_IMPL_PF8_HH
-#define XALGOSPP_FEATURES_IMPL_PF8_HH
-
 #include "xalgospp/features/impl/pf8.hh"
 
 #include "xalgospp/utilities/type_lists.hh"
@@ -67,7 +64,7 @@ namespace xalgospp::features::impl {
           int curr_r { static_cast<int>(std::round(r_map[i])) };
 
           if (curr_r >= 0 &&
-              curr_r < nbins) {
+              curr_r < rstats.num_bins) {
             float value { data[i] };
             if (value < rstats.r_threshold[curr_r] &&
                 value > rstats.l_threshold[curr_r]) {

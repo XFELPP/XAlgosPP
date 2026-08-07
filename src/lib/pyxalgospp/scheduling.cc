@@ -76,13 +76,13 @@ PYBIND11_MODULE(scheduling, scheduling_module) {
     .def("execute", &xalgospp::scheduling::Task::execute)
     .def("is_generator", &xalgospp::scheduling::Task::is_generator)
     .def_property("data",
-                  [](xalgospp::scheduling::Task& self) {
+                  [](xalgospp::scheduling::Task& self) -> py::object {
                     if (auto* py_self = dynamic_cast<pyxalgospp::scheduling::PyTask*>(&self)) {
                       return py_self->get_data();
                     }
-                    return std::shared_ptr<void>{};
+                    return py::none();
                   },
-                  [](xalgospp::scheduling::Task& self, std::shared_ptr<void> data) {
+                  [](xalgospp::scheduling::Task& self, py::object data) {
                     if (auto* py_self = dynamic_cast<pyxalgospp::scheduling::PyTask*>(&self)) {
                       py_self->set_data(data);
                     }

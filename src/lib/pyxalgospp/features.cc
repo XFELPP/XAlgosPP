@@ -20,6 +20,7 @@
 #include "xalgospp/algorithm.hh"
 #include "xalgospp/features/peakfinder8.hh"
 
+#include <ncarray/ncarrays.hh>
 #include <ncarray/soarrays.hh>
 #include <pybind11/numpy.h>
 #include <pybind11/pybind11.h>
@@ -31,7 +32,7 @@ PYBIND11_MODULE(features, features_module) {
   // NOTE: This must be accessible (in PYTHONPATH minimally!) or init will fail
   py::module_::import("ncarray");
 
-  using HostPF8 = xalgospp::features::Peakfinder8;
+  using HostPF8 = xalgospp::features::Peakfinder8<ncarray::HostTag>;
 
   py::classh<HostPF8::Params>(features_module, "Peakfinder8Params")
     .def(py::init<>())
@@ -50,12 +51,13 @@ PYBIND11_MODULE(features, features_module) {
     .def(py::init<>())
     .def(py::init<HostPF8::Params>(), py::arg("params"))
     .def("configure",
-         [](HostPf8& self, const HostPF8::Params& params) {
+         [](HostPF8& self, const HostPF8::Params& params) {
            self.configure(params);
          },
          py::arg("params"))
-    .def("print_configuration", &HostPF8::print_configuration)
-    .def("stage", [](RtCalibration& self) { self.stage(); })
+    .def("print_configuration",
+         py::overload_cast<>(&HostPF8::print_configuration, py::const_))
+    .def("stage", [](HostPF8& self) { self.stage(); })
     .def("process",
          [](const HostPF8& self,
             const ncarray::SOArrayView& input,

@@ -37,6 +37,7 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <span>
 #include <vector>
 #include <algorithm>
 #include <stdexcept>
@@ -71,16 +72,16 @@ namespace xalgospp::features {
 
       static constexpr auto get_metadata() {
         return std::make_tuple(
-          make_param_desc("ADC_threshold", &Peakfinder8Params::ADC_threshold),
-          make_param_desc("min_SNR", &Peakfinder8Params::min_SNR),
-          make_param_desc("min_pixel_count", &Peakfinder8Params::min_pixel_count),
-          make_param_desc("max_pixel_count", &Peakfinder8Params::max_pixel_count),
-          make_param_desc("local_background_radius", &Peakfinder8Params::local_background_radius),
-          make_param_desc("max_number_peaks", &Peakfinder8Params::max_number_peaks),
-          make_param_desc("num_radial_bins", &Peakfinder8Params::num_radial_bins),
-          make_param_desc("iterations", &Peakfinder8Params::iterations),
-          make_param_desc("width", &Peakfinder8Params::width),
-          make_param_desc("height", &Peakfinder8Params::height)
+          make_param_desc("ADC_threshold", &Params::ADC_threshold),
+          make_param_desc("min_SNR", &Params::min_SNR),
+          make_param_desc("min_pixel_count", &Params::min_pixel_count),
+          make_param_desc("max_pixel_count", &Params::max_pixel_count),
+          make_param_desc("local_background_radius", &Params::local_background_radius),
+          make_param_desc("max_number_peaks", &Params::max_number_peaks),
+          make_param_desc("num_radial_bins", &Params::num_radial_bins),
+          make_param_desc("iterations", &Params::iterations),
+          make_param_desc("width", &Params::width),
+          make_param_desc("height", &Params::height)
         );
       }
     };
@@ -144,7 +145,7 @@ namespace xalgospp::features {
         std::span<const float>(reinterpret_cast<const float*>(m_serialized_data.data() + mask_bytes),
                                m_num_pixels);
 
-      if constexpr (std::is_same_v<TargetTag, ncarray::DevTag>) {
+      if constexpr (std::is_same_v<MemTag, ncarray::DevTag>) {
 #ifdef XALG_HAS_CUDA
         m_d_mask_r_map = impl::DevImageData(m_num_pixels);
         m_d_rstats = impl::DevRadialStatistics(m_params.num_radial_bins);
@@ -193,7 +194,7 @@ namespace xalgospp::features {
         std::span<const float>(reinterpret_cast<const float*>(m_serialized_data.data() + mask_bytes),
                                m_num_pixels);
 
-      if constexpr (std::is_same_v<TargetTag, ncarray::DevTag>) {
+      if constexpr (std::is_same_v<MemTag, ncarray::DevTag>) {
 #ifdef XALG_HAS_CUDA
         allocate_gpu_buffers();
         cudaMemcpy(m_d_mask.get(), m_staged_mask.data(), mask_bytes, cudaMemcpyHostToDevice);
@@ -245,7 +246,7 @@ namespace xalgospp::features {
     mutable std::vector<int> m_inss;
     mutable std::vector<int> m_peak_pixels;
 
-    mutable impl::RadialStatistics m_rstats(512); ///< Information for radial background stats
+    mutable impl::RadialStatistics m_rstats; ///< Information for radial background stats
 
     std::vector<std::uint8_t> m_serialized_data;  ///< Serialized mask and radius map
     std::span<const bool> m_staged_mask;          ///< Mask, span over serialized data
@@ -297,7 +298,6 @@ namespace xalgospp::features {
                             m_peak_pixels,
                             m_params.width,
                             m_params.height,
-                            m_params.num_radial_bins,
                             m_params.min_pixel_count,
                             m_params.max_pixel_count,
                             m_params.local_background_radius,

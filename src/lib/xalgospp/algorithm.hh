@@ -190,21 +190,18 @@ namespace xalgospp {
       return 0;
     }
 
-    template <
-      typename InputArg,
-      typename OutputArg,
-      typename D = Derived,
-      typename = hd_std::enable_if_t<
-      []() {
-        if constexpr (requires { D::TypeConstraint == AlgTypeConstraint::StrictOrdering; }) {
-          return D::Input::template accepts_when_paired<InputArg, OutputArg, typename D::Output>;
-        } else {
-          return D::Input::template accepts<InputArg> && D::Output::template accepts<OutputArg>;
-        }
-      }()
-      >
-    >
-    requires (D::Input::template accepts<InputArg> && D::Output::template accepts<OutputArg>)
+    template <typename InputArg, typename OutputArg>
+    requires ([]() {
+      if constexpr (requires { Derived::TypeConstraint == AlgTypeConstraint::StrictOrdering; }) {
+        return Derived::Input::template accepts_when_paired<
+          InputArg, OutputArg, typename Derived::Output
+        >;
+      } else {
+        return
+          Derived::Input::template accepts<InputArg> &&
+          Derived::Output::template accepts<OutputArg>;
+      }
+    }())
     void process(InputArg&& input, OutputArg&& output) const {
       static_assert(Derived::Input::template accepts<InputArg>,
                     "Algorithm Error: Input type not supported by Derived::Input list");
@@ -215,20 +212,18 @@ namespace xalgospp {
                                                       hd_std::forward<OutputArg>(output));
     }
 
-    template <
-      typename InputArg,
-      typename OutputArg,
-      typename D = Derived,
-      typename = hd_std::enable_if_t<
-      []() {
-        if constexpr (requires { D::TypeConstraint == AlgTypeConstraint::StrictOrdering; }) {
-          return D::Input::template accepts_when_paired<InputArg, OutputArg, typename D::Output>;
-        } else {
-          return D::Input::template accepts<InputArg> && D::Output::template accepts<OutputArg>;
-        }
-      }()
-      >
-    >
+    template <typename InputArg, typename OutputArg>
+    requires ([]() {
+      if constexpr (requires { Derived::TypeConstraint == AlgTypeConstraint::StrictOrdering; }) {
+        return Derived::Input::template accepts_when_paired<
+          InputArg, OutputArg, typename Derived::Output
+        >;
+      } else {
+        return
+          Derived::Input::template accepts<InputArg> &&
+          Derived::Output::template accepts<OutputArg>;
+      }
+    }())
     void process(InputArg&& input, OutputArg&& output) {
       static_assert(Derived::Input::template accepts<InputArg>,
                     "Algorithm Error: Input type not supported by Derived::Input list");
@@ -257,20 +252,19 @@ namespace xalgospp {
       process(hd_std::forward<InputArg>(input), hd_std::forward<OutputArg>(output));
     }
 
-    template <
-      typename InputArg,
-      typename OutputArg,
-      typename D = Derived,
-      typename = hd_std::enable_if_t<
-      []() {
-        if constexpr (requires { D::TypeConstraint == AlgTypeConstraint::StrictOrdering; }) {
-          return D::Input::template accepts_when_paired<InputArg, OutputArg, typename D::Output>;
-        } else {
-          return D::Input::template accepts<InputArg> && D::Output::template accepts<OutputArg>;
-        }
-      }()
-      >
-    >
+    template <typename InputArg, typename OutputArg>
+    requires ([]() {
+      if constexpr (requires { Derived::TypeConstraint == AlgTypeConstraint::StrictOrdering; }) {
+        return
+          Derived::Input::template accepts_when_paired<
+            InputArg, OutputArg, typename Derived::Output
+          >;
+      } else {
+        return
+          Derived::Input::template accepts<InputArg> &&
+          Derived::Output::template accepts<OutputArg>;
+      }
+    }())
     void process_many(hd_std::size_t count, InputArg&& input, OutputArg&& output) const {
       static_assert(Derived::Input::template accepts<InputArg>,
                     "Algorithm Error: Input type not supported by Derived::Input list");
@@ -282,20 +276,18 @@ namespace xalgospp {
                                                            hd_std::forward<OutputArg>(output));
     }
 
-    template <
-      typename InputArg,
-      typename OutputArg,
-      typename D = Derived,
-      typename = hd_std::enable_if_t<
-      []() {
-        if constexpr (requires { D::TypeConstraint == AlgTypeConstraint::StrictOrdering; }) {
-          return D::Input::template accepts_when_paired<InputArg, OutputArg, typename D::Output>;
-        } else {
-          return D::Input::template accepts<InputArg> && D::Output::template accepts<OutputArg>;
-        }
-      }()
-      >
-    >
+    template <typename InputArg, typename OutputArg>
+    requires ([]() {
+      if constexpr (requires { Derived::TypeConstraint == AlgTypeConstraint::StrictOrdering; }) {
+        return Derived::Input::template accepts_when_paired<
+          InputArg, OutputArg, typename Derived::Output
+        >;
+      } else {
+        return
+          Derived::Input::template accepts<InputArg> &&
+          Derived::Output::template accepts<OutputArg>;
+      }
+    }())
     void process_many(hd_std::size_t count, InputArg&& input, OutputArg&& output) {
       static_assert(Derived::Input::template accepts<InputArg>,
                     "Algorithm Error: Input type not supported by Derived::Input list");
