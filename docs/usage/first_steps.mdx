@@ -1,0 +1,272 @@
+---
+title: Getting Started
+description: Algorithms and Utilities for Processing Array Data from XFELs.
+sidebar:
+  order: 2
+---
+
+import { Aside, Steps, TabItem, Tabs } from '@astrojs/starlight/components';
+
+The algorithm half, and the scheduling half, of `XAlgosPP` are designed to complement each other, but are perfectly suited to independent use. The goal is that you can take the pieces you need, or find useful, and leave the rest - it is intended to be a modular and additive system with minimal cross-dependencies.
+
+To get started, this document will provide a brief overview of how the interface to an `Algorithm` works, and, following that, an introduction to the scheduling system.
+
+## `Algorithm` and `Parameters` Objects
+
+All algorithms in `XAlgosPP` are descended from a base class called `Algorithm`. This defines the interface to the algorithm begin run - so no matter if you are doing peak finding, or azimuthal integration, or calibrating detector images, the API looks consistent.
+
+To start out, all `Algorithm`s have an associated `Parameters` object (described in slightly more detail later), which is defined and acccesible the `Params` alias/struct. The function `params()` can also be used to get the actual instance.
+
+The `Algorithm` life cycle then consists of three stages, one of which is optional:
+
+<Steps>
+1. **Configuration:** The the `Algorithm` can be provided with its parameterization via the `configure` function, or at construction time.
+2. **Staging:** *Optionally,* additional metadata can be provided through a process called *staging*. There are a number of `get_staged_data` and `set_staged_data` functions which allow the users of the `Algorithm` to determine whether this metadata, and whatever process is needed to retrieve or construct it, should be done by each instance, or whether it can be shared, e.g. For example, you may stage metadata using one instance of the `Algorithm`, in one independent process, and then share the staged data across all processes running on the socket.
+3. **Processing:** Data is processed either one step at a time, or in batch. Each `Algorithm` defines a list of `Input` types, and `Output` types that define what are acceptable inputs and outputs for the processing step. Importantly, all `Algorithm`s expect the `Output` buffer to be provided! For performance reasons, they will never allocate, or return new instances! The acceptable combinations of `Inputs` with `Outputs` is governed by the individual `Algorithm`, and may either be the cartesian product of the `Input` and `Output` type lists (`Product` constraint), or strict sequential ordering of the items in the list (`StrictOrdering` constraint).
+</Steps>
+
+
+The pseudo-definition is then:
+
+```cpp
+
+class Alg : public Algorithm<Alg> {
+  using Input = type_list<MyInputArrayType1, MyInputArrayType2>;
+  using Output = type_list<MyOutputArrayType3, MyOutputArrayType4>;
+
+  // Product means you can use MyInputArrayType1 with an otuput buf of MyOutputArrayType4
+  static constexpr AlgTypeConstraint TypeConstraint { AlgTypeConstraint::Product };
+
+  // StrictOrdering means you can ONLY use MyInputArrayType1 with an
+  // output buf of MyOutputArrayType3
+  // static constexpr AlgTypeConstraint TypeConstraint { AlgTypeConstraint::StrictOrdering };
+
+  struct Params : public Parameters<Params> {
+    ...
+  };
+
+  void configure(Params& params);
+
+  void stage();
+
+  // InputArg is from the Input list
+  // OutputArg is from the Output list
+  template <typename InputArg, typename OutputArg>
+  void process(const InputArg& input, OutputArg& output);
+};
+
+```
+
+### `Parameters`
+
+The `Parameters` constructs consists of a device set of key/value pairs. `Parameters` are defined using pointer to member mappings with an associated string lookup. In this way, parameters can be retrieved by name, and the current state (the values of each of the paramters) can be interated over. On the host only, this can also be printed to console using the `print_parameters` free function - or the `print_configuration` member function of the `Algorithm` itself.
+
+
+## Scheduling with `Task`s and DAGs
+
+The scheduling system consists of a core `DagScheduler` which manages queues to run DAGs of `Task` instances.
+
+The `DagScheduler` maps a series of queues to available NUMA nodes on the system being used to run the graph. Workers are associated to each queue (and therefore, by proxy, to each NUMA node). Preferentially, work will be done from the "local" queues first. When a worker is idle, however, it may take ("steal") work from a remote NUMA node, or from a global queue which contains `Task`s which are not specified as having any NUMA affinity.
+
+Schematically, a simplified view of the system may be:
+
+```bash
+                                 [ Pipeline Tasks ]
+                                         |
+                                 +-------v-------+
+                                 | Locality Hint |
+                                 +-------+-------+
+                                         |
+                   +---------------------+---------------------+
+                   | (Affinity: Node 0)  | (Affinity: Node 1)  | (No Affinity)
+                   v                     v                     v
+           +---------------+     +---------------+     +---------------+
+           |  Node 0 Queue |     |  Node 1 Queue |     |  Global Queue |
+           +-------+-------+     +-------+-------+     +-------+-------+
+                   |                     |                     |
+      +------------+------------+        |                     |
+      |                         |        |                     |
+ +----v-----+              +----v-----+  |                     |
+ | Worker 0 |              | Worker 1 |  |                     |
+ | (Node 0) |              | (Node 0) |  |                     |
+ +----------+              +----------+  |                     |
+      | (Steal Option 1)        |        |                     |
+      +-------------------------v--------+                     |
+      | (Steal Option 2)                                       |
+      +--------------------------------------------------------+
+```
+
+Affinity for the NUMA node is defined by each `Task`. There are also a number of other resource metrics, and hints, that can be provided (memory usage, CPU/GPU localization, etc.). The `DagScheduler` uses two additional mechanisms on top of the basic queuing hieararchy to optimize pipeline throughput.
+
+<Steps>
+
+1. Concurrent high-memory bandwidth utilizing `Task`s are limited to avoid oversubscription and cache line issues.
+2. IO-bound only `Task`s have a separate back pressure mechanism to avoid flooding the queues with excessive in flight steps.
+
+</Steps>
+
+Considering a simple pipeline that has two steps, an IO-bound data generation step, and a memory bound processing step:
+
+```
+[ Input Data Generator ] -----> [ Memory Bound Processing Step]
+```
+
+The scheduling throttling system can be simplied into the following schematic:
+
+```
+                  [ Input Generator ]         [ High Mem Processing ]
+                          |                             |
+                       (Submit)                      (Submit)
+                          |                             |
+                       +-----------------------------------+
+                       |             enqueue()             |
+                       +-----------------------------------+
+                          |                             |
+                       +--v------------+                |
+                       |  Overloaded?  |                |
+                       +-------+-------+                |
+                               |                        |
+                               |                        |
+               +-----+         |       +----+           |
+         +-----| Yes |<--------+------>| No |>-----+    |
+         |     +-----+                 +----+      |    |
+         |                                         |    |
+         v                                         |    |
+ +---------------+                           +-----v----v----+
+ | Suspend Queue |             +------------>|  Queues Above |<-----------+
+ +-------+-------+             |             +-----v----v----+            |
+         |                     |                   |    |                 |
+         |                     |                   |    |                 |
+         |                     |                   | +--v--+    +-----+   |
+         |                     |                   | | Hm? |--->| Yes |---+
+         |                     |                   | +-----+    +-----+
+         |                     |                   |    |
+         |                     |                   |    |
+         |                     |                   | +--v--+
+         |                     |                   | | No. |
+         |         (Pull from suspendeded)         | +--v--+
+         |          (Upon any completion)          |    |
+         |                     |                   |    |
+         |                     |             +-----v----v----+
+         +-------------------->+<------------|  On Complete  |
+                                             +---------------+
+```
+
+Input generators are important as they can be used to create self-propagating DAGs. These will recursively submit new DAGs, so you set it up once, and it will propagate itself until completion.
+
+### Example usage
+
+The following snippets give a rough example of how to setup the scheduling system in C++ and Python:
+
+<Tabs>
+  <TabItem label="Python" icon="seti:python">
+  ```py
+  # ---- Setup configuration for the scheduler ---- #
+  scheduler_cfg: xalgospp.DagSchedulerConfig = xalgospp.DagSchedulerConfig()
+  scheduler_cfg.num_numa_nodes = 0  # Auto-detect
+  scheduler_cfg.threads_per_node = args.threads  # 0 = auto-detect
+  scheduler_cfg.enable_pinning = True
+  scheduler_cfg.max_concurrent_high_mem = args.max_hm
+  scheduler_cfg.max_concurrency_multiplier = 32
+  scheduler_cfg.enable_dynamic_backpressure = bool(args.backpressure)
+  scheduler_cfg.enable_autotuning = bool(args.autotune)
+  scheduler_cfg.warmup_submissions = 10
+  scheduler_cfg.node_memory_bandwidth_limit_gbps = 50.0
+  scheduler_cfg.percent_bandwidth_is_high_mem = 0.25
+
+  # ---- Prepare and launch the workflow ---- #
+  scheduler: xalgospp.DagScheduler = xalgospp.DagScheduler(scheduler_cfg)
+
+  # The DagScheduler can be used to manage the staging of Algorithms across parallel
+  # units
+  scheduler.stage_algorithm(calib_algo, xalgospp.ShmemType.SOCKET)
+
+  # Auto-check bandwidth
+  scheduler.check_memory_bandwidth()
+
+  # --- Create an IO-generator Task with a callback and submit it to run perpetually on its own
+
+  # Callback that builds new DAG each time IO is generated
+  def build_dag_for_step(step_idx: int):
+      read_task: ReadTask = ReadTask(step_idx)
+      calib_task: CalibTask = CalibTask(read_task=read_task, scheduler=scheduler)
+
+      calib_task.add_dependency(read_task)
+
+      return [read_task, calib_task]
+
+  # Create the initial Task and submit
+  init_gen: GeneratorTask = GeneratorTask(
+      scheduler=scheduler,
+      ds=ds,
+      builder_func=build_dag_for_step,
+      num_events=num_events,
+  )
+  scheduler.submit_dag([init_gen])
+
+  # Wait until done
+  scheduler.wait_all()
+
+  ```
+  </TabItem>
+
+  <TabItem label="C++" icon="seti:cpp">
+  ```cpp
+
+  // ---- Setup configuration for the scheduler ---- //
+  xalgospp::scheduling::DagScheduler::Config scheduler_cfg {
+    /* num_numa_nodes                   = */ 0,                 // auto-detect
+    /* threads_per_node                 = */ threads_per_node,  // 0 would be auto-detect
+    /* enable_pinning                   = */ true,
+    /* max_concurrent_high_mem          = */ max_concurrent_hm,
+    /* max_concurrency_multiplier       = */ 32,
+    /* enable_dynamic_backpressure      = */ backpressure,
+    /* enable_autotuning                = */ autotune,
+    /* raw_frame_size_bytes             = */ 0,                 // auto-detect
+    /* warmup_submissions               = */ 10,
+    /* node_memory_bandwidth_limit_gbps = */ 50.0,
+    /* percent_bandwidth_is_high_mem    = */ 0.25
+  };
+
+  // ---- Prepare and launch the workflow ---- //
+  xalgospp::scheduling::DagScheduler scheduler(scheduler_cfg);
+
+  // The DagScheduler can be used to manage the staging of Algorithms across parallel
+  // units
+  scheduler.stage_algorithm(*algo, shmem_type); // shmem_type indicates degree of sharing (machine, numa node, etc.)
+
+  // Auto-check bandwidth
+  scheduler.check_memory_bandwidth();
+
+  // --- Create an IO-generator Task with a callback and submit it to run perpetually on its own
+
+  // Callback that builds new DAG each time IO is generated.
+  auto builder = [&](auto idx) {
+    frame_count++;
+
+    auto read_task { xalgospp::scheduling::make_read_image_task(ds, fetcher, idx) };
+    using AlgTask = xalgospp::scheduling::AlgorithmTask<
+      FakeProcessor,
+      typename decltype(read_task)::element_type
+    >;
+
+    auto algo_task = std::make_shared<AlgTask>(scheduler, algo, read_task);
+
+    /// The algo_task depends on the read_task -- DAG is: read_task -> algo_task
+    algo_task->add_dependency(read_task);
+
+    return std::vector<std::shared_ptr<xalgospp::scheduling::Task>>{read_task, algo_task};
+  };
+
+  // Create the initial Task and submit.
+  auto init_gen =
+    std::make_shared<xalgospp::scheduling::IOGeneratorTask<decltype(ds)>>(scheduler,
+                                                                          ds,
+                                                                          builder);
+  scheduler.submit_dag({ init_gen });
+
+  // Wait until done.
+  scheduler.wait_all();
+  ```
+  </TabItem>
+</Tabs>

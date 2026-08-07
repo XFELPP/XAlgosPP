@@ -38,7 +38,9 @@ jobs:
           npm install -g moxygen
           npm install fast-xml-parser
           doxygen Doxyfile
-          moxygen --frontmatter --pages --classes --html-anchors --output docs/api/md/api-%s.md docs/api/xml
+          # Not currently using pages.
+          # moxygen --frontmatter --pages --classes --html-anchors --output docs/api/md/api-%s.md docs/api/xml
+          moxygen --frontmatter --classes --html-anchors --output docs/api/md/api-%s.md docs/api/xml
           # Script runs inplace in the docs/md folder
           node utilities/organize-api-docs.mjs
 
@@ -55,11 +57,12 @@ jobs:
           # Clear the existing target folder to remove deleted pages
           rm -rf xfelpp-home/src/content/docs/xalgospp/*
           mkdir -p xfelpp-home/src/content/docs/xalgospp/api
+          mkdir -p xfelpp-home/src/content/docs/xalgospp/usage
 
           # Copy source markdown into the xalgospp API sub-directory
           cp -r docs/api/md/* xfelpp-home/src/content/docs/xalgospp/api
           cp -r docs/index.mdx xfelpp-home/src/content/docs/xalgospp/index.mdx
-          # TODO: Setup copies for any manual pages once those are being written
+          cp -r docs/usage/* xfelpp-home/src/content/docs/xalgospp/usage
 
       - name: Commit and Push Changes
         working-directory: ./xfelpp-home
