@@ -20,15 +20,22 @@
 #ifndef XALGOSPP_DETECTOR_LCLS2_CALIBDB_HH
 #define XALGOSPP_DETECTOR_LCLS2_CALIBDB_HH
 
-#include "httplib.h"
-#include "rapidjson/document.h"
-#include "spdlog/spdlog.h"
+#include "xalgospp/export_macro.hh"
+
+#include <httplib.h>
+#ifdef ADD // cpp-httplib has this macro which conflicts the ncarray OpCode::ADD
+#undef ADD
+#endif
+#include <ncarray/ncarrays.hh>
+#include <rapidjson/document.h>
+#include <spdlog/spdlog.h>
 
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <set>
 #include <string>
-#include <string_view>
+#include <utility>
 #include <vector>
 
 namespace xalgospp::lcls2 {
@@ -40,19 +47,6 @@ namespace xalgospp::lcls2 {
   static constexpr unsigned LCLS_MAX_EXP_RUN_NUM { 9999 };
 
   /**
-   * A descriptor for a single kind of calibration constants.
-   *
-   * This struct is used when retrieving raw constants from the LCLS2 calibration
-   * database endpoints. It holds the raw bytes along with information on the
-   * underlying datatype and the shape the bytes should be reformed into.
-   */
-  struct CalibrationConstants {
-    std::vector<std::uint8_t> data; ///< Raw byte stream
-    std::string dtype;              ///< The datatype of each element
-    std::vector<std::size_t> shape; ///< The final shape the byte stream should take
-  };
-
-  /**
    * Retains information on calibration constants retrieved from metadata queries.
    *
    * The calibration constants are stored across two different documents in MongoDB.
@@ -60,7 +54,7 @@ namespace xalgospp::lcls2 {
    * to a gridfs entry that holds the bulk data. The rest of the associated metadata
    * aids in interpreting the bulk data.
    */
-  struct CalibDocMetadata {
+  struct XALG_API CalibDocMetadata {
     std::uint32_t doc_unix_ts { 0 };       ///< Unix timestamp for the document
     unsigned doc_run_begin { 0 };          ///< The starting run of validity (for sorting)
     unsigned doc_run_end { 0 };            ///< The ending run of validity (for sorting)
@@ -100,6 +94,27 @@ namespace xalgospp::lcls2 {
   };
 
   /**
+   * A descriptor for a single kind of calibration constants.
+   *
+   * This struct is used when retrieving raw constants from the LCLS2 calibration
+   * database endpoints. It holds the raw bytes along with information on the
+   * underlying datatype and the shape the bytes should be reformed into.
+   */
+  struct XALG_API CalibrationConstants {
+    std::vector<std::uint8_t> data; ///< Raw byte stream
+    std::string dtype;              ///< The datatype of each element
+    std::vector<std::size_t> shape; ///< The final shape the byte stream should take
+    CalibDocMetadata metadata;      ///< The associated metadata for this set of constants
+
+    /**
+     * Convert the calibration data to an NCArray.
+     *
+     * @returns An NCArrayView over the calibration data.
+     */
+    static ncarray::NCArray to_ncarray(const CalibrationConstants& consts);
+  };
+
+  /**
    * Parse a metadata document retrieved from the calibdb.
    *
    * The metadata documents have the following schema (among others):
@@ -117,7 +132,7 @@ namespace xalgospp::lcls2 {
    * @param[in] meta_doc The document with metadata retrieved from CalibDB.
    * @returns The parsed struct with relevant metadata.
    */
-  CalibDocMetadata parse_metadata_doc(rapidjson::Value& meta_doc);
+  XALG_API CalibDocMetadata parse_metadata_doc(const rapidjson::Value& meta_doc);
 
   /**
    * Retrieve the `short name` for a detector of given type using its serial number.
@@ -130,9 +145,9 @@ namespace xalgospp::lcls2 {
    * @param[in] det_serial_no The full serial number of the specific detector.
    * @returns The `short name` of the indicated detector.
    */
-  std::string get_detector_short_name(std::string_view base_url,
-                                      std::string_view det_type,
-                                      std::string_view det_serial_no);
+  XALG_API std::string get_detector_short_name(std::string& base_url,
+                                               std::string& det_type,
+                                               std::string& det_serial_no);
 
   /**
    * Extract the data from the raw byte stream given the provided metadata.
@@ -146,10 +161,10 @@ namespace xalgospp::lcls2 {
    * @param[in] data_nelem The total number of elements from the metadata doc.
    * @param[out] out_buf The buffer to copy the bytes to.
    */
-  void load_values_from_byte_stream(const std::uint8_t* byte_stream,
-                                    std::string_view data_dtype,
-                                    std::size_t data_nelem,
-                                    std::vector<std::uint8_t>& out_buf);
+  XALG_API void load_values_from_byte_stream(const std::uint8_t* byte_stream,
+                                             const std::string& data_dtype,
+                                             std::size_t data_nelem,
+                                             std::vector<std::uint8_t>& out_buf);
 
   /**
    * Split a string and peform an operation on it.
@@ -162,8 +177,8 @@ namespace xalgospp::lcls2 {
    * @returns The vector of split string components.
    */
   template <typename T, class Fn>
-  std::vector<T> split_string(const std::string_view s,
-                              const std::string_view delim,
+  std::vector<T> split_string(const std::string& s,
+                              const std::string& delim,
                               Fn&& cast) {
     std::vector<T> parts;
     std::size_t nextPos { 0 };
@@ -173,7 +188,7 @@ namespace xalgospp::lcls2 {
     while ((nextPos = s.find(delim, lastPos)) != std::string::npos) {
       part = s.substr(lastPos, nextPos - lastPos);
       if (!part.empty()) {
-        parts.push_back(part);
+        parts.push_back(cast(part));
       }
       lastPos = nextPos + 1;
     }
@@ -198,8 +213,26 @@ namespace xalgospp::lcls2 {
    * @param[in] json_dict The JSON dictionary retrieved from the CalibDB API request.
    * @param[out] constants The map to store the deserialized constants.
    */
-  void deserialize_json_dict(rapidjson::Value& json_dict,
-                             std::map<std::string, CalibrationConstants>& constants);
+  XALG_API void deserialize_json_dict(rapidjson::Value& json_dict,
+                                      std::map<std::string, CalibrationConstants>& constants);
+
+  /**
+   * Check whether a retrieved metadata document has an appropriate validity range.
+   *
+   * @note If using the "detector" database, this function only checks that the values
+   *       make sense, not the run is in a range. Invalid values (like a garbage string)
+   *       could indicate other problems with the document, but the detector database
+   *       is intended to be used across experiments, so the ranges don't apply.
+   *
+   * @param[in] metadata_doc The retrieved constants metadata document.
+   * @param[in] target_run The target run number for which the document should be valid.
+   * @param[in] is_det_db_doc Whether the document was a detector database document.
+   * @returns Returns the begin and end run if valid (for later sorting); otherwise nullopt.
+   */
+  XALG_API std::optional<std::pair<unsigned, unsigned>>
+  is_doc_valid_for_run(const rapidjson::Value& metadata_doc,
+                       unsigned target_run,
+                       bool is_det_db_doc);
 
   /**
    * For the provided short name get most recent valid constants for the experiment/run.
@@ -217,10 +250,10 @@ namespace xalgospp::lcls2 {
    * @param[in] run The run number.
    * @param[in] constants_types The type of constants being looked for.
    */
-  std::map<std::string, CalibrationConstants>
-  retrieve_calib_constants_of_type(std::string_view base_url,
-                                   std::string_view det_short_name,
-                                   std::string_view experiment,
+  XALG_API std::map<std::string, CalibrationConstants>
+  retrieve_calib_constants_of_type(std::string& base_url,
+                                   std::string& det_short_name,
+                                   std::string& experiment,
                                    unsigned run,
                                    std::set<std::string> constants_type);
 

@@ -30,26 +30,6 @@ jobs:
         os: [ubuntu-latest, windows-2022, macos-latest]
 
     steps:
-      # - name: Free Unused Disk Space
-      #   if: runner.os == 'Linux'
-      #   run: |
-      #     sudo rm -rf /usr/share/dotnet
-      #     sudo rm -rf /usr/local/lib/android
-      #     sudo rm -rf /opt/ghc
-      #     sudo rm -rf /usr/local/.ghcup
-      #     sudo rm -rf /usr/share/swift
-      #     sudo rm -rf /usr/lib/jvm
-      #     df -h
-
-      # - name: Create Swap File
-      #   if: runner.os == 'Linux'
-      #   run: |
-      #     sudo fallocate -l 12G /swapfile_xalgospp
-      #     sudo chmod 600 /swapfile_xalgospp
-      #     sudo mkswap /swapfile_xalgospp
-      #     sudo swapon /swapfile_xalgospp
-      #     free -h
-
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0                     # v7
 
         # MANUALLY try and pull this down. So Windows doesn't break.... every time
@@ -91,14 +71,6 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-cibw-
 
-      - name: Grab Windows CUDA
-        uses: Jimver/cuda-toolkit@406fa58d8abbf1bad2edd217b58b073dd2f548e4                  # v0.2.34
-        if: runner.os == 'Windows'
-        id: cuda-toolkit
-        with:
-          cuda: '12.8.0'
-          use-github-cache: 'false'
-
       - name: Clean Strawberry Perl (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
@@ -113,11 +85,37 @@ jobs:
         with:
           arch: amd64
 
-      - name: Build wheels
-        # Check pyproject.toml for supported versions and additional config
+      - name: Install MS-MPI (Windows)
+        uses: mpi4py/setup-mpi@3417e34f1394a16723d7913c236642c24e95fd5a                     # v1.4.4
+        if: runner.os == 'Windows'
+        with:
+          mpi: msmpi
+
+      - name: Update Version for Variant
+        shell: bash
+        run: |
+          python -c "import re; p = 'meson.build'; c = open(p).read(); open(p, 'w').write(re.sub(r\"version:\s*'([0-9]+\.[0-9]+\.[0-9]+)'\", r\"version: '\1+host'\", c))"
+
+      - name: Build 3.8 wheels
+        # NOTE: cibuildwheel does not support Python 3.8 after the 3.x series
+        uses: pypa/cibuildwheel@8d2b08b68458a16aeb24b64e68a09ab1c8e82084                    # v3.4.1
+        with:
+          config-file: "{package}/utilities/cibw_config/host.toml"
+        env:
+          CIBW_BUILD: "cp38-*"
+          CIBW_CACHE_PATH: ".cibw_cache"
+          SYSTEM_VERSION_COMPAT: "0"
+          PreferredToolArchitecture: "x64"
+
+      - name: Build 3.9 and later wheels
         uses: pypa/cibuildwheel@294735312765b09d24a2fbec22660ce817587d55                    # v4.1.0
+        with:
+          config-file: "{package}/utilities/cibw_config/host.toml"
         env:
           CIBW_CACHE_PATH: ".cibw_cache"
+          CIBW_ENABLE: "cpython-prerelease"
+          CIBW_BUILD: "cp39-* cp310-* cp311-* cp312-* cp313-* cp314-* cp314t-* cp315-* cp315t-*"
+          SYSTEM_VERSION_COMPAT: "0"
           PreferredToolArchitecture: "x64"
 
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a              # v7.0.1

@@ -1,0 +1,7 @@
+[wrap-git]
+url = https://github.com/XFELPP/ncarray.git
+revision = main
+depth = 1
+
+[provide]
+ncarray = ncarray_dep

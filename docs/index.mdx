@@ -10,22 +10,39 @@ hero:
       #icon: right-arrow
 ---
 
-import { Aside } from '@astrojs/starlight/components';
+import { Aside, Steps } from '@astrojs/starlight/components';
 
 <Aside type="note">
   This website and associated infrastructure is still under construction. Please bear with us as we bring everything online.
 </Aside>
 
-`XAlgosPP` is a small library intended to aid with first-pass processing of array data produced by XFEL light sources. It contains a number of utilities for interfacing with external sources to fetch necessary auxiliary data (like calibration constants), in addition to providing robust algorithm implementations for CPU and GPU workloads.
+`XAlgosPP` is designed to complement `sbio` as a set of utilities for the first-pass processing of array data produced by XFEL light sources. With `sbio`, you can read in the data - then you have to actually do something with it. `XAlgosPP` comes in to provide the basic algorithms, and mechanisms to organize and schedule their application.
+
+The library is divisible into two halves:
+
+- The first half contains algorithm implementations for CPU- and GPU-based workloads. These ar defined around a single unified interface, so it is always clear how to parameterize an algorithm, what input and output types are accepted, and whether any associated metadata will be required.
+- The second half consists of a scheduling system to make the most of the computational resources at your disposal. Even given a properly implemented parallel algorithm, it is often not sufficient to just add additional parallel processes (e.g., with MPI), to scale well. A careful balancing of IO bandwidth, memory bandwidth, computational cost in, e.g., flops, and so on, will generally be required. The `XAlgosPP` `DagScheduler` helps hide some of this complexity. You define the logic as a DAG (read data -> process step 1 -> process step 2, etc.), the scheduler determines how to optimize throughput on your system.
 
 `XAlgosPP` is a cross-platform library with minimal build dependencies. It is written in C++, and provides Python bindings through `pybind11`. It is an [XFELPP](https://www.xfelpp.org) project - when using this library from Python, the only runtime dependencies are the other projects of the `XFELPP` framework.
 
 ## Organization and Features
 
-`XAlgosPP` is organized around a single `AlgorithmBase` struct. All algorithms derive from this single, simple, class, and thus share its interface. This means that whether you are calibrating data, searching for peaks, or performing reductions (like azimuthal integration), the steps are identical: create the algorithm, and pass the data in.
+### Algorithms
 
-There are a number of categories of algorithms which are currently, or will shortly be, provided:
+`XAlgosPP` currently has a limited set of algorithms actually implemented. Long term, the plan is never to have a large set, but a number of curated implementations will be added over time to cover the following categories of applications:
 
-- Calibration utilities - Fetch constants and calibrate your data on CPU or GPU.
-- Peakfinding and "droplet" algorithms - Search for the photons in your images.
-- Reduction algorithms - integrate your data in time, bin it in various dimensions, or perform azimuthal integration.
+<Steps>
+
+1. **Detector Corrections:** Often the very first thing that will need to be done is some form of detector correction. `XAlgosPP` includes, or will include, utilities for gathering relevant metadata (e.g. calibration constants), and applying corrections to raw image data.
+2. **Feature Extraction:** A number of routines are designed to extract small features of interest from large area detector images. For example, performing peak finding, speckle analysis, or droplet extraction.
+3. **Reductions:** The final category includes routines for the most common reduction operations. This includes binning in all dimensions, including time, as well as operations which incorporate geometric considerations, like azimuthal integration.
+
+</Steps>
+
+Algorithms are, for the most part, implemented for both CPU and GPU. The entry point is the same, and the base class is even constructible in device code. Some features may not always be available for GPU; however, this is generally limited ot metadata "staging".
+
+### Scheduling
+
+The `XAlgosPP` scheduling system includes the scheduler itself, as well as tools for wrapping and defining DAGs (directed acyclic graphs). The scheduling system can be used with code other than the algorithms provided by the library - wrap your routine in a task and run it alongside everything else!
+
+The scheduling system also includes tools for profiling performance of your system, as well as an automated parameter tuner, so that the complex parameterization of the scheduling backend does not need to be hand tuned to start out.

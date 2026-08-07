@@ -25,6 +25,8 @@
 
 #include "ncarray/layout.hh" // Re-use ncarray's metadata struct for det descr
 
+#include <Eigen/Dense>
+
 #ifdef _WIN32
 #include <BaseTsd.h>
 typedef SSIZE_T ssize_t;
@@ -34,6 +36,7 @@ typedef SSIZE_T ssize_t;
 
 #include <cstdint>
 #include <cstring>
+#include <span>
 
 #ifndef XALGOS_HD
 #ifdef __CUDACC__
@@ -44,6 +47,9 @@ typedef SSIZE_T ssize_t;
 #endif
 
 namespace xalgospp {
+  using det::CalibParameters;
+  using det::PixelCalibStruct;
+
   template <typename T>
   Eigen::Map<Eigen::Array<T, Eigen::Dynamic, 1>>
   ncarray_to_eigen(const ncarray::NCArrayView& view) {
@@ -56,44 +62,6 @@ namespace xalgospp {
                                                      view.size());
   }
 
-  class CalibrationAlgorithm : public AlgorithmBase<CalibrationAlgorithm> {
-  public:
-    CalibrationAlgorithm(const CalibParameters& params,
-                         const ncarray::NCArrayView& constants_view)
-      : m_params(params)
-    {
-      // Map the ncarray view of constants to our internal calibration span
-      m_constants =
-        std::span<PixelCalibStruct>(static_cast<PixelCalibStruct*>(constants_view.data()),
-                                    constants_view.size());
-    }
-
-    const char* name_impl() const { return "Calibration"; }
-
-    void process_impl(const ncarray::NCArrayView& input,
-                      ncarray::NCArray& output) {
-      if (input.dtype() != ncarray::DType::uint16) {
-        throw std::runtime_error("Calibration input raw data must be uint16!");
-      }
-
-      auto raw_map = ncarray_to_eigen<std::uint16_t>(input);
-      auto out_map = ncarray_to_eigen<float>(output);
-      out_map = calibrate(raw_map, m_params, m_constants, 0);
-    }
-
-  private:
-    CalibParameters m_params;
-    std::span<PixelCalibStruct> m_constants;
-  };
-
-  class AlgorithmFactory {
-  public:
-    static std::unique_ptr<DetectorAlgorithm>
-    create_calibration(const CalibParameters& params, const ncarray::NCArrayView& constants) {
-      return std::make_unique<CalibrationAlgorithm>(params, constants);
-    }
-  };
-
   static constexpr std::uint16_t MaxNameSize { 256 };
   static constexpr std::uint8_t MaxNDim { 10 };
   static constexpr std::uint16_t MaxDetectors { 256 };
@@ -101,7 +69,7 @@ namespace xalgospp {
   struct DetectorDescriptor {
     char detector_type[MaxNameSize] { 0 };
     // We'll re-use ncarray's metadata struct for detector descriptions (GPU friendly)
-    Metadata shape;
+    ncarray::Metadata shape;
     CalibParameters calib_params;
 
     XALGOS_HD inline bool operator<(const DetectorDescriptor& other) const {

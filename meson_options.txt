@@ -5,6 +5,12 @@ option(
     description: 'Build the C++ shared libraries.'
 )
 option(
+    'build_mpi',
+    type: 'string',
+    value: 'auto',
+    description: 'Whether to build MPI support and if so how. Choices: auto, mpich, ompi, none'
+)
+option(
     'build_python',
     type: 'boolean',
     value: true,

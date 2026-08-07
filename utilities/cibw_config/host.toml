@@ -1,0 +1,139 @@
+[tool.cibuildwheel]
+# The following are not even supported in the cibw releases being used so dont
+# need to be specified. PyPy was not enabled so does not need to be skipped.
+# pp* (PyPy for now)
+# cp36-* (Python 3.6)
+# cp37-* (Python 3.7)
+# Still specify though the 32-bit skips
+# *i686 (32-bit builds)
+# *win32 (32-bit Windows)
+skip = ["*i686", "*-win32"]
+
+# Builds are defined in the ymls for the actions. We use two containers with
+# two different cibuildwheel versions to support 3.8 in one, and 3.9-3.15 in the other
+
+# Try to set things up to cache what's possible to make things faster
+build-frontend = { name = "pip", args = ["--no-build-isolation"] }
+
+# macOS will NOT download the wheel ARG.
+#before-build = [
+#    "python -m pip install -U pip",
+#    "python -m pip install \"meson>=1.10.1\" meson-python ninja \"pybind11[global]\" setuptools cmake delvewheel",
+#    "python -m pip install --break-system-packages \"ncarray==0.7.3+host\" --index-url https://pypi.xfelpp.org/host/ --find-links https://pypi.xfelpp.org/host/ncarray --no-index"
+#]
+
+# For C++23 need a newer GCC coming from manylinux_2_28 (GCC 13) and later
+# manylinux_2_34 will give GCC 14
+manylinux-x86_64-image = "manylinux_2_28"
+manylinux-aarch64-image = "manylinux_2_28"
+
+config-settings = { "setup-args" = ["-Dbuild_core=false"] }
+
+[tool.cibuildwheel.linux]
+# The CI YAML pulls cuda-toolkit and determines version.
+# Just setup links here.
+before-all = [
+    """
+    if command -v apt-get >/dev/null; then
+        apt-get update && apt-get install -y ccache
+    elif command -v dnf >/dev/null; then
+        dnf install -y epel-release && dnf install -y ccache
+    elif command -v yum >/dev/null; then
+        yum install -y epel-release && yum install -y ccache
+    elif command -v apk >/dev/null; then
+        apk add ccache
+        apk add --no-cache autoconf automake libtool m4 perl make gcc g++ linux-headers musl-dev bash
+    fi
+    ccache -z
+
+    mkdir install
+    /opt/python/cp310-cp310/bin/pip install meson ninja
+    /opt/python/cp310-cp310/bin/python -m pip install "ncarray==0.7.3+host" --extra-index-url https://pypi.xfelpp.org/host/ || true
+    /opt/python/cp310-cp310/bin/python -m pip install "sbio==0.1.1+host" --extra-index-url https://pypi.xfelpp.org/host/ || true
+    export PATH="/usr/lib64/openmpi/bin:/opt/python/cp310-cp310/bin:$PATH"
+    meson setup builddir -Dbuild_core=true -Dbuild_python=false -Dxalg_as_wheel=false -Dbuild_mpi=mpich --prefix={project}/install
+    # Temp musl debugging...
+    meson compile -j 6 -C builddir || (cat builddir/meson-logs/mpich-5.0.1-build.log && exit 1)
+    meson install -C builddir
+    """,
+]
+before-build = [
+    "python -m pip install -U pip",
+    "python -m pip install \"meson>=1.10.1\" meson-python ninja \"pybind11[global]\" setuptools cmake delvewheel",
+    "python -m pip install --break-system-packages \"ncarray==0.7.3+host\" --extra-index-url https://pypi.xfelpp.org/host/"
+    "python -m pip install --break-system-packages \"sbio==0.1.1+host\" --extra-index-url https://pypi.xfelpp.org/host/"
+]
+
+repair-wheel-command = "python utilities/repair_wheel.py {wheel} {dest_dir} --no-exclude-core"
+
+[tool.cibuildwheel.linux.environment]
+CC = "ccache gcc"
+CXX = "ccache g++"
+CCACHE_DIR = "/project/.ccache"
+PIP_RETRIES = "20"
+LIBRARY_PATH = "/project/install/lib:/project/install/lib64:$LIBRARY_PATH"
+LD_LIBRARY_PATH = "/project/install/lib:/project/install/lib64:$LD_LIBRARY_PATH"
+LDFLAGS = "-L/project/install/lib -L/project/install/lib64"
+
+[tool.cibuildwheel.macos]
+before-all = """
+brew install open-mpi ccache ninja meson cmake python@3.10 || true
+export PATH="$HOME/Library/Python/3.10/bin:/opt/homebrew/opt/python@3.10/bin:$PATH"
+export PYTHONPATH="$HOME/Library/Python/3.10/lib/python/site-packages:/opt/homebrew/lib/python3.10/site-packages:$PYTHONPATH"
+export PYTHON="/opt/homebrew/opt/python@3.10/bin/python3.10"
+ccache -z
+python3.10 -m pip install --break-system-packages meson ninja "ncarray==0.7.3+host" "sbio==0.1.1+host" --extra-index-url https://pypi.xfelpp.org/host/ || true
+meson setup builddir -Dbuild_core=true -Dbuild_python=false -Dxalg_as_wheel=false -Dbuild_mpi=mpich --prefix=$(pwd)/install
+meson compile -j 6 -C builddir
+meson install -C builddir
+"""
+before-build = [
+    "python -m pip install -U pip",
+    "python -m pip install \"meson>=1.10.1\" meson-python ninja \"pybind11[global]\" setuptools cmake delvewheel",
+    # This monstrosity is because Python3.8 runs under rosetta and the ARM64/Intel mismatch
+    # Despite cibuildwheel creating a macosx_11_0_arm64 wheel for ncarray. It cannot
+    # download it with pip.
+    "python -m pip install --break-system-packages \"ncarray==0.7.3+host\" --extra-index-url https://pypi.xfelpp.org/host/ --platform macosx_11_0_arm64 --only-binary :all: --target \"$(python -c 'import site; print(site.getsitepackages()[0])')\"",
+    "python -m pip install --break-system-packages \"sbio==0.1.1+host\" --extra-index-url https://pypi.xfelpp.org/host/ --platform macosx_11_0_arm64 --only-binary :all: --target \"$(python -c 'import site; print(site.getsitepackages()[0])')\"",
+]
+
+[tool.cibuildwheel.macos.environment]
+CC = "ccache clang"
+CXX = "ccache clang++"
+CCACHE_DIR = ".ccache"
+PIP_RETRIES = "20"
+MACOSX_DEPLOYMENT_TARGET = "11.0"
+# This shim seems to cause issues with Python 3.8 trying to install ncarray
+# Since ncarray was built under 11.0, the Python 3.8 compiled with 10.XYZ
+# is declared as "too old" so it rrejects the wheel (macosx_11_0_arm64)
+SYSTEM_VERSION_COMPAT = "0"
+# Not able to find cmake in wheel step otherwise?
+PATH = "/opt/homebrew/bin:/usr/local/bin:/Applications/CMake.app/Contents/bin:$PATH"
+LIBRARY_PATH = "$GITHUB_WORKSPACE/install/lib:$LIBRARY_PATH"
+DYLD_LIBRARY_PATH = "$GITHUB_WORKSPACE/install/lib:$DYLD_LIBRARY_PATH"
+LDFLAGS = "-L$GITHUB_WORKSPACE/install/lib"
+
+[tool.cibuildwheel.windows]
+config-settings = { "setup-args" = ["-Dcpp_compiler_launcher=", "-Dcuda_compiler_launcher=", "-Dbuild_core=false"] }
+before-all = [
+    "python -m pip install meson ninja",
+    "python -m pip install \"ncarray==0.7.3+host\" --extra-index-url https://pypi.xfelpp.org/host/",
+    #.... Didn't get the .lib bundled.... Have to add this until I fix ncarray repair_wheel_win.....
+    "python -c \"import os, glob, subprocess, ncarray; d=ncarray.get_lib_dir(); lib_p=os.path.join(d, 'ncarray.lib'); sp=os.path.dirname(os.path.dirname(os.path.abspath(ncarray.__file__))); dlls=glob.glob(os.path.join(sp, '**', '*.dll'), recursive=True); dll=dlls[0] if dlls else None; (not os.path.exists(lib_p) and dll) and [open(os.path.join(d, 'ncarray.def'), 'w').write('EXPORTS\\n' + '\\n'.join([l.split()[-1] for l in subprocess.check_output(['dumpbin', '/exports', dll], text=True).splitlines() if len(l.split())>=4 and l.split()[0].isdigit()])), subprocess.run(['lib', f'/def:' + os.path.join(d, 'ncarray.def'), f'/out:{lib_p}', '/machine:x64'], check=True)]\"",
+    "meson setup builddir -Dbuild_core=true -Dbuild_python=false -Dxalg_as_wheel=false -Dbuild_mpi=auto --prefix=%CD%/install",
+    "meson compile -j 6 -C builddir",
+    "meson install -C builddir"
+]
+before-build = [
+    "python -m pip install -U pip",
+    "python -m pip install \"meson>=1.10.1\" meson-python ninja \"pybind11[global]\" setuptools cmake delvewheel",
+    "python -m pip install --break-system-packages \"ncarray==0.7.3+host\" --extra-index-url https://pypi.xfelpp.org/host/",
+    "python -m pip install --break-system-packages \"sbio==0.1.1+host\" --extra-index-url https://pypi.xfelpp.org/host/",
+]
+repair-wheel-command = "python utilities/repair_wheel_win.py {dest_dir} {wheel} --no-exclude-core"
+
+[tool.cibuildwheel.windows.environment]
+PIP_RETRIES = "20"
+LIB = "$GITHUB_WORKSPACE/install/lib;$LIB"
+PATH = "$GITHUB_WORKSPACE/install/bin;$PATH"
+PreferredToolArchitecture = "x64"

@@ -20,8 +20,10 @@
 #ifndef XALGOSPP_UTILITIES_MONGODB_HH
 #define XALGOSPP_UTILITIES_MONGODB_HH
 
+#include "xalgospp/export_macro.hh"
+
 #include <cstdint>
-#include <string_view>
+#include <string>
 
 namespace xalgospp {
   /**
@@ -30,7 +32,7 @@ namespace xalgospp {
    * The timestamps from MongoDB are stored as a big-endian Unix timestamp.
    * The first 4 bytes of the ID contain it.
    */
-  std::uint32_t timestamp_from_bson_object_id(std::string_view oid);
+  XALG_API std::uint32_t timestamp_from_bson_object_id(std::string& oid);
 } // namespace xalgospp
 
 #endif // XALGOSPP_UTILITIES_MONGODB_HH

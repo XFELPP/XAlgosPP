@@ -17,14 +17,21 @@
  * this program. If not, see <https://www.gnu.org/licenses/>.
  */
 
-#include "xalgospp/utilities/mongodb.hh"
+#ifndef XALGOSPP_EXPORT_MACRO_HH
+#define XALGOSPP_EXPORT_MACRO_HH
 
-#include <cstdint>
-#include <string>
+#ifdef _WIN32
 
-namespace xalgospp {
-  std::uint32_t timestamp_from_bson_object_id(std::string& oid) {
-    return static_cast<std::uint32_t>(std::stoul(oid.substr(0, 8), nullptr, 16));
-  }
-} // namespace xalgospp
+#ifdef XALG_BUILD_API
+#define XALG_API __declspec(dllexport)
+#else
+#define XALG_API __declspec(dllimport)
+#endif // XALG_BUILD_API
 
+#else
+
+#define XALG_API
+
+#endif // _WIN32
+
+#endif // XALGOSPP_EXPORT_MACRO_HH

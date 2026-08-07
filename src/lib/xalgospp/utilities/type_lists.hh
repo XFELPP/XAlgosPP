@@ -17,14 +17,17 @@
  * this program. If not, see <https://www.gnu.org/licenses/>.
  */
 
-#include "xalgospp/utilities/mongodb.hh"
+#ifndef XALGOSPP_UTILITIES_TYPE_LISTS_HH
+#define XALGOSPP_UTILITIES_TYPE_LISTS_HH
 
-#include <cstdint>
-#include <string>
+#include "xalgospp/parameters.hh" // type_list
+
+#include <ncarray/ncarrays.hh>
+#include <ncarray/soarrays.hh>
 
 namespace xalgospp {
-  std::uint32_t timestamp_from_bson_object_id(std::string& oid) {
-    return static_cast<std::uint32_t>(std::stoul(oid.substr(0, 8), nullptr, 16));
-  }
-} // namespace xalgospp
+  using HostArrayViewTypes =
+    type_list<ncarray::NCViewFor<ncarray::HostTag>, ncarray::SOViewFor<ncarray::HostTag>>;
+} // namespace XAlgosPP
 
+#endif // XALGOSPP_UTILITIES_TYPE_LISTS_HH

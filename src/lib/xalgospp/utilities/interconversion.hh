@@ -20,12 +20,20 @@
 #ifndef XALGOSPP_UTILITIES_INTERCONVERSION_HH
 #define XALGOSPP_UTILITIES_INTERCONVERSION_HH
 
-#include "ncarray/dtype.hh"
+#include "xalgospp/export_macro.hh"
+#include "xalgospp/parameters.hh"
+#include "xalgospp/utilities/type_lists.hh" // HostArrayViewTypes
+
+#include <Eigen/Dense>
+#include <ncarray/dtype.hh>
+#include <ncarray/ncarrays.hh>
+#include <ncarray/soarrays.hh>
 
 #include <stdexcept>
-#include <string_view>
+#include <string>
+#include <type_traits>
 
-namespace XAlgosPP {
+namespace xalgospp {
   /**
    * Error indicating an unknown, unrecognized, or invalid type representation.
    */
@@ -48,47 +56,22 @@ namespace XAlgosPP {
    * @exception invalid_type_string Thrown if the dtype_str is an unrecognized type
    *            representation.
    */
-  ncarray::DType string_to_dtype(std::string_view dtype_str) {
-    if (dtype_str == "bool" || dtype_str == "bool_") {
-      return ncarray::DType::bool_;
-    } else if (dtype_str == "char" || dtype_str == "char_") {
-      return ncarray::DType::char_;
-    } else if (dtype_str == "uint8") {
-      return ncarray::DType::uint8;
-    } else if (dtype_str == "uint16") {
-      return ncarray::DType::uint16;
-    } else if (dtype_str == "uint32") {
-      return ncarray::DType::uint32;
-    } else if (dtype_str == "uint64") {
-      return ncarray::DType::uint64;
-    } else if (dtype_str == "int8") {
-      return ncarray::DType::int8;
-    } else if (dtype_str == "int16") {
-      return ncarray::DType::int16;
-    } else if (dtype_str == "int32") {
-      return ncarray::DType::int32;
-    } else if (dtype_str == "int64") {
-      return ncarray::DType::int64;
-    /* float16/half not currently supported. */
-    } else if (dtype_str == "float32") {
-      return ncarray::DType::float32;
-    } else if (dtype_str == "float64" || dtype_str == "double") {
-      return ncarray::DType::float64;
-    } else if (dtype_str == "float96"  ||
-               dtype_str == "float128" ||
-               dtype_str == "longdouble") {
-      return ncarray::DType::float128;
-    } else if (dtype_str == "complex64" || dtype_str == "csingle") {
-      return ncarray::DType::complex64;
-    } else if (dtype_str == "complex128" || dtype_str == "cdouble") {
-      return ncarray::DType::complex128;
-    } else if (dtype_str == "complex192" ||
-               dtype_str == "complex256" ||
-               dtype_str == "clongdouble") {
-      return ncarray::DType::complex256;
-    }
+  XALG_API ncarray::DType string_to_dtype(const std::string& dtype_str);
 
-    throw invalid_type_string("Unsupported type str repr: " + dtype_str + "!");
+  /**
+   * Convert an NCArrayView or SOArrayView to an Eigen Map.
+   *
+   * @tparam T The underlying datatype of the array views.
+   * @tparam InputArg The NCArrayView or SOArrayView type.
+   * @param view The NCArrayView to convert.
+   * @returns An Eigen::Map over the NCArrayView's data.
+   */
+  template <typename T, typename InputArg>
+  requires (HostArrayViewTypes::template accepts<InputArg>)
+  inline Eigen::Map<Eigen::Array<T, Eigen::Dynamic, 1>>
+  to_eigen_array(const InputArg& view) {
+    return Eigen::Map<Eigen::Array<T, Eigen::Dynamic, 1>>(static_cast<T*>(view.data()),
+                                                          view.size());
   }
 } // namespace XAlgosPP
 
