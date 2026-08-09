@@ -22,6 +22,58 @@ import platform
 import sys
 
 
+def get_pkg_config() -> str:
+    xalg_wheel_pkgconfig_dir: str = os.path.join(os.path.dirname(__file__), "pkgconfig")
+    if os.path.exists(xalg_wheel_pkgconfig_dir):
+        return xalg_wheel_pkgconfig_dir
+
+    win_prefix_lib_dir: str = os.path.join(sys.prefix, "Library")
+    if os.path.exists(win_prefix_lib_dir):
+        win_prefix_pkgconfig_dir: str = os.path.join(win_prefix_lib_dir, "pkgconfig")
+
+        if os.path.exists(win_prefix_pkgconfig_dir):
+            return win_prefix_pkgconfig_dir
+
+        for subdir in os.listdir(win_prefix_lib_dir):
+            subdir_pkgconfig: str = os.path.join(
+                win_prefix_lib_dir, subdir, "pkgconfig"
+            )
+            if os.path.exists(subdir_pkgconfig):
+                return subdir_pkgconfig
+
+    unix_prefix_lib_dir: str = os.path.join(sys.prefix, "lib")
+    if os.path.exists(unix_prefix_lib_dir):
+        unix_prefix_pkgconfig_dir: str = os.path.join(unix_prefix_lib_dir, "pkgconfig")
+
+        if os.path.exists(unix_prefix_pkgconfig_dir):
+            return unix_prefix_pkgconfig_dir
+
+        for subdir in os.listdir(unix_prefix_lib_dir):
+            subdir_pkgconfig: str = os.path.join(
+                unix_prefix_lib_dir, subdir, "pkgconfig"
+            )
+            if os.path.exists(subdir_pkgconfig):
+                return subdir_pkgconfig
+
+    return ""
+
+
+def xalg_pkg_config() -> None:
+    import argparse
+
+    parser: argparse.ArgumentParser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--pkg-config-path",
+        action="store_true",
+        help="Print the path usable by pkg-config.",
+    )
+
+    args: argparse.Namespace = parser.parse_args()
+
+    if args.pkg_config_path:
+        print(get_pkg_config())
+
+
 def get_include() -> str:
     xalgospp_wheel_include_dir: str = os.path.join(os.path.dirname(__file__), "include")
     if os.path.exists(xalgospp_wheel_include_dir):

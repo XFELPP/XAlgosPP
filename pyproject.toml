@@ -42,5 +42,8 @@ classifiers = [
     "Topic :: Software Development :: Libraries :: Python Modules",
 ]
 
+[project.scripts]
+xalgospp-pkg-config = "xalgospp:xalg_pkg_config"
+
 [tool.meson-python.args]
 install = ['--skip-subprojects']
