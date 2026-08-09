@@ -46,35 +46,6 @@ def update_pc_in_repaired_wheel(whl_path: str):
         os.replace(temp_whl, whl_path)
 
 
-def copy_lib_files(whl_path: str, install_lib_dir: str):
-    with zipfile.ZipFile(whl_path, "r") as z:
-        pc_path_in_whl = next(
-            (f for f in z.namelist() if f.endswith("xalgospp.pc")), None
-        )
-        if not pc_path_in_whl:
-            return
-
-        dlls: List[str] = [
-            f
-            for f in z.namelist()
-            if "xalgospp" in os.path.basename(f) and f.endswith(".dll")
-        ]
-        if not dlls:
-            return
-
-        dll_dir_in_whl: str = os.path.dirname(dlls[0])
-
-    with zipfile.ZipFile(whl_path, "a") as z:
-        for lib_file in glob.glob(os.path.join(install_lib_dir, "*.lib")):
-            lib_name: str = os.path.basename(lib_file)
-            if "xalgospp" in lib_name:
-                target_in_whl: str = (
-                    f"{dll_dir_in_whl}/{lib_name}" if dll_dir_in_whl else lib_name
-                )
-                print(f"  Adding import library {lib_name} -> {target_in_whl}")
-                z.write(lib_file, target_in_whl)
-
-
 def main():
     if len(sys.argv) < 3:
         print("Usage: repair_wheel.py <dest_dir> <wheel_path>")

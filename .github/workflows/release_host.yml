@@ -61,7 +61,7 @@ jobs:
         with:
           mpi: msmpi
 
-      - name: Build libxalgospp
+      - name: Build libxalgospp (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
@@ -91,7 +91,7 @@ jobs:
           meson compile -C builddir
           meson install -C builddir
 
-      - name: Build libxalgospp
+      - name: Build libxalgospp (Linux)
         if: runner.os == 'Linux'
         shell: bash
         run: |
