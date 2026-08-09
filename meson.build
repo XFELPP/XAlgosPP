@@ -231,7 +231,7 @@ deps_for_xalgospp += cpp_httplib_dep
 # endif
 
 ## Eigen
-eigen_dep = dependency('eigen', required: false)
+eigen_dep = dependency('eigen3', 'eigen', required: false)
 if not eigen_dep.found()
     message('eigen not found - using subproject')
     eigen_proj = subproject('eigen')
@@ -265,6 +265,9 @@ else
             mpi_dep = dependency('mpi', language: 'c', required: false)
         else
             mpi_dep = dependency('mpi', required: false)
+            if not mpi_dep.found()
+                mpi_dep = dependency('mpi', language: 'c', required: false)
+            endif
         endif
         if mpi_dep.found()
             found_mpi = true
@@ -335,7 +338,7 @@ print(";".join(libs).replace("\r", ""))
     )
     message('NCArray Python Lib Search RETURNCODE: ' + nc_cmd_res.returncode().to_string())
     message('NCArray Python Lib Search STDOUT: ' + nc_cmd_res.stdout())
-    message('NCArray Python Lib Search STDERR: ' + nc_cmd_res.stdout())
+    message('NCArray Python Lib Search STDERR: ' + nc_cmd_res.stderr())
 
     nc_libs_raw = nc_cmd_res.stdout().strip().split(';')
 
@@ -366,7 +369,7 @@ print(";".join(libs).replace("\r", ""))
 
         message('NCArray Python Include Search RETURNCODE: ' + nc_inc_cmd_res.returncode().to_string())
         message('NCArray Python Include Search STDOUT: ' + nc_inc_cmd_res.stdout())
-        message('NCArray Python Include Search STDERR: ' + nc_inc_cmd_res.stdout())
+        message('NCArray Python Include Search STDERR: ' + nc_inc_cmd_res.stderr())
 
         nc_inc = nc_inc_cmd_res.stdout().strip()
 
@@ -498,7 +501,7 @@ print(";".join(libs).replace("\r", ""))
 
         message('SBIO Python Include Search RETURNCODE: ' + sbio_inc_cmd_res.returncode().to_string())
         message('SBIO Python Include Search STDOUT: ' + sbio_inc_cmd_res.stdout())
-        message('SBIO Python Include Search STDERR: ' + sbio_inc_cmd_res.stdout())
+        message('SBIO Python Include Search STDERR: ' + sbio_inc_cmd_res.stderr())
 
         sbio_inc = sbio_inc_cmd_res.stdout().strip()
 

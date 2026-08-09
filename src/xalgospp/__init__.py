@@ -60,8 +60,21 @@ def get_pkg_config() -> str:
 
 def xalg_pkg_config() -> None:
     import argparse
+    import os
+    import re
+    from typing import Optional
 
     parser: argparse.ArgumentParser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--pkg-config-cflags",
+        action="store_true",
+        help="Print the Cflags from the .pc file.",
+    )
+    parser.add_argument(
+        "--pkg-config-libs",
+        action="store_true",
+        help="Print the Libs from the .pc file.",
+    )
     parser.add_argument(
         "--pkg-config-path",
         action="store_true",
@@ -70,6 +83,24 @@ def xalg_pkg_config() -> None:
 
     args: argparse.Namespace = parser.parse_args()
 
+    pc_path: str = get_pkg_config()
+    pc_file: str = os.path.join(pc_path, "xalgospp.pc")
+    if args.pkg_config_cflags:
+        if pc_path and os.path.exists(pc_file):
+            with open(pc_file, "r") as f:
+                pc_content: str = f.read()
+                cflags_m: Optional[re.Match] = re.search(
+                    r"(?<=Cflags:)(.*)", pc_content
+                )
+                if cflags_m:
+                    print(cflags_m.group().strip())
+    elif args.pkg_config_libs:
+        if pc_path and os.path.exists(pc_file):
+            with open(pc_file, "r") as f:
+                pc_content = f.read()
+                libs_m: Optional[re.Match] = re.search(r"(?<=Libs:)(.*)", pc_content)
+                if libs_m:
+                    print(libs_m.group().strip())
     if args.pkg_config_path:
         print(get_pkg_config())
 

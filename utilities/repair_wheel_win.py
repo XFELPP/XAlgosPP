@@ -21,8 +21,7 @@ def update_pc_in_repaired_wheel(whl_path: str):
         repaired_libs: List[str] = [
             f
             for f in z.namelist()
-            if re.search(r"xalgospp[a-zA-Z0-9_\-]*\.lib", f)
-            or re.search(r"devxalgospp[a-zA-Z0-9_\-]*\.lib", f)
+            if re.search(r"(lib)?(dev)?(xalgospp)[a-zA-Z0-9_.\-]*\.lib", f)
         ]
 
     if repaired_libs and pc_content:
@@ -162,7 +161,9 @@ def main():
     delvewheel_cmd.extend(["-w", dest_dir, wheel_path])
 
     subprocess.run(delvewheel_cmd, check=True)
-    update_pc_in_repaired_wheel(whl_path=wheel_path)
+    repaired_wheels: List[str] = glob.glob(os.path.join(dest_dir, "*.whl"))
+    for whl in repaired_wheels:
+        update_pc_in_repaired_wheel(whl_path=whl)
 
 
 if __name__ == "__main__":

@@ -2,10 +2,11 @@
 import glob
 import os
 import re
+import site
 import sys
 import subprocess
 import zipfile
-from typing import List
+from typing import Dict, List
 
 
 def update_pc_in_repaired_wheel(whl_path: str):
@@ -21,8 +22,10 @@ def update_pc_in_repaired_wheel(whl_path: str):
         repaired_libs: List[str] = [
             f
             for f in z.namelist()
-            if re.search(r"libxalgospp[a-zA-Z0-9_\-]*\.(so|dylib|dll)", f)
-            or re.search(r"libdevxalgospp[a-zA-Z0-9_\-]*\.(so|dylib|dll)", f)
+            if re.search(
+                r"^(lib)?(xalgospp|devxalgospp)[a-zA-Z0-9_.\-]*\.(so|dylib|dll)",
+                f,
+            )
         ]
 
     if repaired_libs and pc_content:
@@ -71,112 +74,203 @@ def main():
             "repair",
         ]
 
-    with zipfile.ZipFile(wheel_path, "r") as z:
-        for name in z.namelist():
-            if name.endswith(".so") or ".so." in name:
-                content = z.read(name)
-                for lib in set(
-                    re.findall(rb"libncarray[a-zA-Z0-9_\-]*\.so[0-9\.]*", content)
-                ):
-                    cmd.extend(["--exclude", lib.decode("utf-8")])
-                for lib in set(
-                    re.findall(rb"libncdevarray[a-zA-Z0-9_\-]*\.so[0-9\.]*", content)
-                ):
-                    cmd.extend(["--exclude", lib.decode("utf-8")])
-                for lib in set(
-                    re.findall(rb"libmpi[a-zA-Z0-9_\-]*\.so[0-9\.]*", content)
-                ):
-                    cmd.extend(["--exclude", lib.decode("utf-8")])
-                for lib in set(
-                    re.findall(rb"libpciaccess[a-zA-Z0-9_\-]*\.so[0-9\.]*", content)
-                ):
-                    cmd.extend(["--exclude", lib.decode("utf-8")])
-                for lib in set(
-                    re.findall(rb"libsbio[a-zA-Z0-9_\-]*\.so[0-9\.]*", content)
-                ):
-                    cmd.extend(["--exclude", lib.decode("utf-8")])
-                for lib in set(
-                    re.findall(rb"libxtc[a-zA-Z0-9_\-]*\.so[0-9\.]*", content)
-                ):
-                    cmd.extend(["--exclude", lib.decode("utf-8")])
-                for lib in set(
-                    re.findall(
-                        rb"lib(?:gcc_s|stdc\+\+|gomp)[a-zA-Z0-9_\-]*\.so[0-9\.]*",
-                        content,
-                    )
-                ):
-                    cmd.extend(["--exclude", lib.decode("utf-8")])
+    if sys.platform == "darwin":
+        mac_excludes: set = set()
+        files_to_scan: List[bytes] = []
 
-    if not no_exclude_core:
+        with zipfile.ZipFile(wheel_path, "r") as z:
+            for name in z.namelist():
+                if (
+                    name.endswith(".dylib")
+                    or ".dylib." in name
+                    or name.endswith(".so")
+                    or ".so." in name
+                ):
+                    files_to_scan.append(z.read(name))
+
+        install_dir: str = os.path.join(
+            os.environ.get("GITHUB_WORKSPACE", "."), "install"
+        )
+        if os.path.exists(install_dir):
+            for root, _, files in os.walk(install_dir):
+                for f in files:
+                    if (
+                        f.endswith(".dylib")
+                        or ".dylib." in f
+                        or f.endswith(".so")
+                        or ".so." in f
+                    ):
+                        try:
+                            with open(os.path.join(root, f), "rb") as fp:
+                                files_to_scan.append(fp.read())
+                        except Exception:
+                            pass
+        prefixes: List[bytes] = [
+            b"ncarray",
+            b"ncdevarray",
+            b"mpi",
+            b"mpich",
+            b"pciaccess",
+            b"sbio",
+            b"devsbio",
+            b"xtc",
+            b"brotli",
+            b"libz",
+            b"opa",
+            b"gcc_s",
+            b"stdc++",
+            b"gomp",
+            b"crypto",
+            b"ssl",
+        ]
+        if not no_exclude_core:
+            prefixes.append(b"xalgospp")
+
+        for content in files_to_scan:
+            for p in prefixes:
+                escaped_p: bytes = re.escape(p)
+                matches: List[bytes] = re.findall(
+                    rb"(?:lib)?[a-zA-Z0-9_\-]*"
+                    + escaped_p
+                    + rb"[a-zA-Z0-9_\-]*\.[0-9\.]*\.?dylib",
+                    content,
+                )
+
+                for m in matches:
+                    mac_excludes.add(m.decode("utf-8"))
+
+                matches_so: List[bytes] = re.findall(
+                    rb"(?:lib)?[a-zA-Z0-9_\-]*"
+                    + escaped_p
+                    + rb"[a-zA-Z0-9_\-]*\.so[0-9\.]*",
+                    content,
+                )
+
+                for m in matches_so:
+                    mac_excludes.add(m.decode("utf-8"))
+
+        for exc in mac_excludes:
+            cmd.extend(["--exclude", exc])
+    else:
+        linux_excludes: List[str] = [
+            "libncarray*",
+            "libncdevarray*",
+            "libmpi*",
+            "libmpich*",
+            "libpciaccess*",
+            "libsbio*",
+            "libdevsbio*",
+            "libxtc*",
+            "libbrotli*",
+            "libz*",
+            "libopa*",
+            "libgcc_s*",
+            "libstdc++*",
+            "libgomp*",
+            "libcrypto*",
+            "libssl*",
+        ]
+        if not no_exclude_core:
+            linux_excludes.append("*xalgospp*")
+        for pat in linux_excludes:
+            cmd.extend(["--exclude", pat])
+
+    if sys.platform == "darwin":
+        env: Dict[str, str] = os.environ.copy()
+        try:
+            site_pkg: str = subprocess.check_output(
+                [sys.executable, "-c", "import site; print(site.getsitepackages()[0])"],
+                text=True,
+            ).strip()
+            extra_paths: List[str] = [
+                os.path.join(os.environ.get("GITHUB_WORKSPACE", "."), "install", "lib"),
+                os.path.join(site_pkg, "ncarray", ".dylibs"),
+                os.path.join(site_pkg, "sbio", ".dylibs"),
+            ]
+            env["DYLD_LIBRARY_PATH"] = (
+                ":".join(p for p in extra_paths if os.path.exists(p))
+                + ":"
+                + env.get("DYLD_LIBRARY_PATH", "")
+            )
+        except Exception:
+            pass
+
+        cmd.extend(
+            [
+                "-w",
+                dest_dir,
+                wheel_path,
+            ]
+        )
+        print(f"Running: {' '.join(cmd)}")
+        subprocess.run(cmd, check=True, env=env)
+    else:
         cmd.extend(
             [
                 "--exclude",
-                "libxalgospp.so.1",
+                "libcuda.so.1",
+                "--lib-sdir",
+                ".",
+                "-w",
+                dest_dir,
+                wheel_path,
             ]
         )
-    cmd.extend(
-        [
-            "--exclude",
-            "libcuda.so.1",
-            "--lib-sdir",
-            ".",
-            "-w",
-            dest_dir,
-            wheel_path,
-        ]
-    )
-    print(f"Running: {' '.join(cmd)}")
-    subprocess.run(cmd, check=True)
+        print(f"Running: {' '.join(cmd)}")
+        subprocess.run(cmd, check=True)
 
     repaired_wheels: List[str] = glob.glob(os.path.join(dest_dir, "*.whl"))
     if not repaired_wheels:
         print("No repaired wheels found.")
         sys.exit(1)
 
-    cuda_home: str = os.environ.get("CUDA_HOME", "/usr/local/cuda")
-    builtins_src: List[str] = glob.glob(
-        os.path.join(cuda_home, "lib64/libnvrtc-builtins.so*")
-    )
-
-    if not builtins_src:
-        print(
-            "Warning: libnvrtc-builtins.so not found in CUDA directory. Skipping injection."
+    if sys.platform == "darwin":
+        for whl in repaired_wheels:
+            update_pc_in_repaired_wheel(whl_path=whl)
+    else:
+        cuda_home: str = os.environ.get("CUDA_HOME", "/usr/local/cuda")
+        builtins_src: List[str] = glob.glob(
+            os.path.join(cuda_home, "lib64/libnvrtc-builtins.so*")
         )
-        sys.exit(0)
 
-    builtins_file: str = builtins_src[0]
-
-    for whl in repaired_wheels:
-        print(f"Injecting builtins into {whl}...")
-        with zipfile.ZipFile(whl, "a") as z:
-            libs_dir: str = next(
-                (
-                    os.path.dirname(name)
-                    for name in z.namelist()
-                    if "libnvrtc-" in os.path.basename(name)
-                ),
-                None,
+        if not builtins_src:
+            print(
+                "Warning: libnvrtc-builtins.so not found in CUDA directory. Skipping injection."
             )
 
-            if not libs_dir:
-                libs_dir = next(
-                    (
-                        os.path.dirname(name)
-                        for name in z.namelist()
-                        if "libcudart-" in os.path.basename(name)
-                    ),
-                    "xalgospp.libs",
-                )
+        for whl in repaired_wheels:
+            if builtins_src:
+                print(f"Injecting builtins into {whl}...")
+                with zipfile.ZipFile(whl, "a") as z:
+                    libs_dir: str = next(
+                        (
+                            os.path.dirname(name)
+                            for name in z.namelist()
+                            if "libnvrtc-" in os.path.basename(name)
+                        ),
+                        "",
+                    )
 
-            for builtins_file in builtins_src:
-                # Make sure to update symlink'd filenames appropriately
-                real_file: str = os.path.realpath(builtins_file)
-                basename: str = os.path.basename(builtins_file)
-                target_path: str = os.path.join(libs_dir, basename)
-                print(f"  Adding {real_file} -> {target_path}")
-                z.write(real_file, target_path)
+                    if not libs_dir:
+                        libs_dir = next(
+                            (
+                                os.path.dirname(name)
+                                for name in z.namelist()
+                                if "libcudart-" in os.path.basename(name)
+                            ),
+                            "xalgospp.libs",
+                        )
 
-        update_pc_in_repaired_wheel(whl_path=whl)
+                    builtins_file: str
+                    for builtins_file in builtins_src:
+                        # Make sure to update symlink'd filenames appropriately
+                        real_file: str = os.path.realpath(builtins_file)
+                        basename: str = os.path.basename(builtins_file)
+                        target_path: str = os.path.join(libs_dir, basename)
+                        print(f"  Adding {real_file} -> {target_path}")
+                        z.write(real_file, target_path)
+
+            update_pc_in_repaired_wheel(whl_path=whl)
 
 
 if __name__ == "__main__":
