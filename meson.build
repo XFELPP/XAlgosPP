@@ -607,3 +607,41 @@ subdir('examples')
 
 # Build the test suite
 # subdir('tests')
+
+# Setup a pkgconfig file now after the build completed.
+pkg = import('pkgconfig')
+
+if build_core_opt and not xalg_as_wheel_opt
+    pc_install_dir = get_option('libdir') / 'pkgconfig'
+else
+    pc_install_dir = py_install_dir / 'xalgospp/pkgconfig'
+endif
+
+pc_libs = [libxalgospp]
+
+if xalg_has_cuda
+    pc_libs += [libdevxalgospp]
+endif
+
+feature_flags = []
+if xalg_has_cuda
+    feature_flags += ['-DXALG_HAS_CUDA']
+endif
+
+if get_variable('found_mpi', false)
+    feature_flags += ['-DXALG_HAS_MPI']
+endif
+
+pc_headers = ['.', 'xalgospp']
+pkg.generate(
+    name: 'xalgospp',
+    description: 'Algorithms and Utilities for X-Ray Free Electron Laser (XFEL) Area Detector Analysis.',
+    libraries: pc_libs,
+    extra_cflags: feature_flags,
+    subdirs: pc_headers,
+    version: meson.project_version(),
+    url: 'https://xalgospp.xfelpp.org',
+    license: 'AGPL-3.0-only',
+    relocatable: true,
+    install_dir: pc_install_dir,
+)
