@@ -1,11 +1,49 @@
 #!/usr/bin/env python3
+import glob
 import os
 import re
 import sys
-import glob
 import subprocess
 import zipfile
 from typing import List
+
+
+def update_pc_in_repaired_wheel(whl_path: str):
+    with zipfile.ZipFile(whl_path, "r") as z:
+        pc_path_in_whl: str = next(
+            (f for f in z.namelist() if f.endswith("xalgospp.pc")), None
+        )
+        if not pc_path_in_whl:
+            return
+
+        pc_content: str = z.read(pc_path_in_whl).decode("utf-8")
+
+        repaired_libs: List[str] = [
+            f
+            for f in z.namelist()
+            if re.search(r"libxalgospp[a-zA-Z0-9_\-]*\.(so|dylib|dll)", f)
+            or re.search(r"libdevxalgospp[a-zA-Z0-9_\-]*\.(so|dylib|dll)", f)
+        ]
+
+    if repaired_libs and pc_content:
+        pc_dir: str = os.path.dirname(pc_path_in_whl)
+        updated_libs: List[str] = []
+        for lib in repaired_libs:
+            rel_lib_path: str = os.path.relpath(lib, start=pc_dir).replace("\\", "/")
+            updated_libs.append(rel_lib_path)
+
+        new_link_str: str = " ".join(f"${{pcfiledir}}/{rl}" for rl in updated_libs)
+        updated_content: str = re.sub(r"Libs:.*", f"Libs: {new_link_str}", pc_content)
+
+        temp_whl: str = whl_path + ".tmp"
+        with zipfile.ZipFile(whl_path, "r") as zin:
+            with zipfile.ZipFile(temp_whl, "w", compression=zin.compression) as zout:
+                for item in zin.infolist():
+                    if item.filename == pc_path_in_whl:
+                        zout.writestr(item, updated_content.encode("utf-8"))
+                    else:
+                        zout.writestr(item, zin.read(item.filename))
+        os.replace(temp_whl, whl_path)
 
 
 def main():
@@ -20,10 +58,18 @@ def main():
     # do NOT exclude them, otherwise you do.
     no_exclude_core: bool = "--no-exclude-core" in sys.argv
 
-    cmd: List[str] = [
-        "auditwheel",
-        "repair",
-    ]
+    cmd: List[str]
+    if sys.platform == "darwin":
+        cmd = ["delocate-wheel"]
+        if "--require-archs" in sys.argv:
+            idx: int = sys.argv.index("--require-archs")
+            delocate_archs: str = sys.argv[idx + 1]
+            cmd.extend(["--require-archs", delocate_archs])
+    else:
+        cmd = [
+            "auditwheel",
+            "repair",
+        ]
 
     with zipfile.ZipFile(wheel_path, "r") as z:
         for name in z.namelist():
@@ -129,6 +175,8 @@ def main():
                 target_path: str = os.path.join(libs_dir, basename)
                 print(f"  Adding {real_file} -> {target_path}")
                 z.write(real_file, target_path)
+
+        update_pc_in_repaired_wheel(whl_path=whl)
 
 
 if __name__ == "__main__":

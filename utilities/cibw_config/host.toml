@@ -30,33 +30,6 @@ manylinux-aarch64-image = "manylinux_2_28"
 config-settings = { "setup-args" = ["-Dbuild_core=false"] }
 
 [tool.cibuildwheel.linux]
-# The CI YAML pulls cuda-toolkit and determines version.
-# Just setup links here.
-before-all = [
-    """
-    if command -v apt-get >/dev/null; then
-        apt-get update && apt-get install -y ccache
-    elif command -v dnf >/dev/null; then
-        dnf install -y epel-release && dnf install -y ccache
-    elif command -v yum >/dev/null; then
-        yum install -y epel-release && yum install -y ccache
-    elif command -v apk >/dev/null; then
-        apk add ccache
-        apk add --no-cache autoconf automake libtool m4 perl make gcc g++ linux-headers musl-dev bash
-    fi
-    ccache -z
-
-    mkdir install
-    /opt/python/cp310-cp310/bin/pip install meson ninja
-    /opt/python/cp310-cp310/bin/python -m pip install "ncarray==0.7.4+host" --extra-index-url https://pypi.xfelpp.org/host/ || true
-    /opt/python/cp310-cp310/bin/python -m pip install "sbio==0.1.3+host" --extra-index-url https://pypi.xfelpp.org/host/ || true
-    export PATH="/opt/python/cp310-cp310/bin:$PATH"
-    meson setup builddir -Dbuild_core=true -Dbuild_python=false -Dxalg_as_wheel=false -Dbuild_mpi=mpich --prefix={project}/install
-    # Temp musl debugging...
-    meson compile -j 6 -C builddir || (cat builddir/meson-logs/mpich-5.0.1-build.log && exit 1)
-    meson install -C builddir
-    """,
-]
 before-build = [
     "python -m pip install -U pip",
     "python -m pip install \"meson>=1.10.1\" meson-python ninja \"pybind11[global]\" setuptools cmake delvewheel",
@@ -74,19 +47,9 @@ PIP_RETRIES = "20"
 LIBRARY_PATH = "/project/install/lib:/project/install/lib64:$LIBRARY_PATH"
 LD_LIBRARY_PATH = "/project/install/lib:/project/install/lib64:$LD_LIBRARY_PATH"
 LDFLAGS = "-L/project/install/lib -L/project/install/lib64"
+PKG_CONFIG_PATH = "/project/install/lib/pkgconfig:/project/install/lib64/pkgconfig:$PKG_CONFIG_PATH"
 
 [tool.cibuildwheel.macos]
-before-all = """
-brew install autoconf automake libtool ccache ninja meson cmake python@3.10 || true
-export PATH="$HOME/Library/Python/3.10/bin:/opt/homebrew/opt/python@3.10/bin:$PATH"
-export PYTHONPATH="$HOME/Library/Python/3.10/lib/python/site-packages:/opt/homebrew/lib/python3.10/site-packages:$PYTHONPATH"
-export PYTHON="/opt/homebrew/opt/python@3.10/bin/python3.10"
-ccache -z
-python3.10 -m pip install --break-system-packages meson ninja "ncarray==0.7.4+host" "sbio==0.1.3+host" --extra-index-url https://pypi.xfelpp.org/host/ || true
-meson setup builddir -Dbuild_core=true -Dbuild_python=false -Dxalg_as_wheel=false -Dbuild_mpi=mpich --prefix=$(pwd)/install
-meson compile -j 6 -C builddir
-meson install -C builddir
-"""
 before-build = [
     "python -m pip install -U pip",
     "python -m pip install \"meson>=1.10.1\" meson-python ninja \"pybind11[global]\" setuptools cmake delvewheel",
@@ -96,17 +59,8 @@ before-build = [
     "python -m pip install --break-system-packages \"ncarray==0.7.4+host\" --extra-index-url https://pypi.xfelpp.org/host/ --platform macosx_11_0_arm64 --only-binary :all: --target \"$(python -c 'import site; print(site.getsitepackages()[0])')\"",
     "python -m pip install --break-system-packages \"sbio==0.1.3+host\" --extra-index-url https://pypi.xfelpp.org/host/ --platform macosx_11_0_arm64 --only-binary :all: --target \"$(python -c 'import site; print(site.getsitepackages()[0])')\"",
 ]
-repair-wheel-command = """
-delocate-wheel --require-archs {delocate_archs} -w {dest_dir} \
-    --exclude libncarray.1.dylib                              \
-    --exclude libncdevarray.1.dylib                           \
-    --exclude libncarrayjit.1.dylib                           \
-    --exclude libsbio.1.dylib                                 \
-    --exclude libxtc1slim.1.dylib                             \
-    --exclude libxtc2slim.1.dylib                             \
-    --exclude libxalgospp.1.dylib                             \
-    {wheel}
-"""
+repair-wheel-command = "python utilities/repair_wheel.py {wheel} {dest_dir} --require-archs {delocate_archs} --no-exclude-core"
+
 
 [tool.cibuildwheel.macos.environment]
 CC = "ccache clang"
@@ -123,21 +77,10 @@ PATH = "/opt/homebrew/bin:/usr/local/bin:/Applications/CMake.app/Contents/bin:$P
 LIBRARY_PATH = "$GITHUB_WORKSPACE/install/lib:$LIBRARY_PATH"
 DYLD_LIBRARY_PATH = "$GITHUB_WORKSPACE/install/lib:$DYLD_LIBRARY_PATH"
 LDFLAGS = "-L$GITHUB_WORKSPACE/install/lib"
+PKG_CONFIG_PATH = "$GITHUB_WORKSPACE/install/lib/pkgconfig:$PKG_CONFIG_PATH"
 
 [tool.cibuildwheel.windows]
 config-settings = { "setup-args" = ["-Dcpp_compiler_launcher=", "-Dcuda_compiler_launcher=", "-Dbuild_core=false"] }
-before-all = [
-    "python -m pip install meson ninja",
-    "python -m pip install \"ncarray==0.7.4+host\" --extra-index-url https://pypi.xfelpp.org/host/",
-    #.... Didn't get the .lib bundled.... Have to add this until I fix ncarray repair_wheel_win.....
-    "python -c \"import glob, os, subprocess, ncarray; d = ncarray.get_lib_dir(); sp = os.path.dirname(os.path.dirname(os.path.abspath(ncarray.__file__))); [(open(os.path.join(d, os.path.splitext(os.path.basename(dll))[0] + '.def'), 'w').write('EXPORTS\\\\n' + '\\\\n'.join([l.split()[-1] for l in subprocess.check_output(['dumpbin', '/exports', dll], text=True).splitlines() if len(l.split())>=4 and l.split()[0].isdigit()])), subprocess.run(['lib', f'/def:' + os.path.join(d, os.path.splitext(os.path.basename(dll))[0] + '.def'), f'/out:' + os.path.join(d, os.path.splitext(os.path.basename(dll))[0] + '.lib'), '/machine:x64'], check=True)) for dll in glob.glob(os.path.join(sp, '**', '*.dll'), recursive=True) if not os.path.exists(os.path.join(d, os.path.splitext(os.path.basename(dll))[0] + '.lib'))]\"",
-    "python -m pip install \"sbio==0.1.3+host\" --extra-index-url https://pypi.xfelpp.org/host/",
-    #.... Didn't get the .lib bundled.... Have to add this until I fix sbio repair_wheel_win.....
-    "python -c \"import glob, os, subprocess, sbio; d = sbio.get_lib_dir(); sp = os.path.dirname(os.path.dirname(os.path.abspath(sbio.__file__))); [(open(os.path.join(d, os.path.splitext(os.path.basename(dll))[0] + '.def'), 'w').write('EXPORTS\\\\n' + '\\\\n'.join([l.split()[-1] for l in subprocess.check_output(['dumpbin', '/exports', dll], text=True).splitlines() if len(l.split())>=4 and l.split()[0].isdigit()])), subprocess.run(['lib', f'/def:' + os.path.join(d, os.path.splitext(os.path.basename(dll))[0] + '.def'), f'/out:' + os.path.join(d, os.path.splitext(os.path.basename(dll))[0] + '.lib'), '/machine:x64'], check=True)) for dll in glob.glob(os.path.join(sp, '**', '*.dll'), recursive=True) if not os.path.exists(os.path.join(d, os.path.splitext(os.path.basename(dll))[0] + '.lib'))]\"",
-    "meson setup builddir -Dbuild_core=true -Dbuild_python=false -Dxalg_as_wheel=false -Dbuild_mpi=auto --prefix=%CD%/install",
-    "meson compile -j 6 -C builddir",
-    "meson install -C builddir"
-]
 before-build = [
     "python -m pip install -U pip",
     "python -m pip install \"meson>=1.10.1\" meson-python ninja \"pybind11[global]\" setuptools cmake delvewheel",
@@ -151,3 +94,4 @@ PIP_RETRIES = "20"
 LIB = "$GITHUB_WORKSPACE/install/lib;$LIB"
 PATH = "$GITHUB_WORKSPACE/install/bin;$PATH"
 PreferredToolArchitecture = "x64"
+PKG_CONFIG_PATH = "$GITHUB_WORKSPACE/install/lib/pkgconfig;$PKG_CONFIG_PATH"

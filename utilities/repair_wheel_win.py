@@ -2,8 +2,77 @@
 import os
 import sys
 import glob
+import re
 import subprocess
+import zipfile
 from typing import List, Optional
+
+
+def update_pc_in_repaired_wheel(whl_path: str):
+    with zipfile.ZipFile(whl_path, "r") as z:
+        pc_path_in_whl: str = next(
+            (f for f in z.namelist() if f.endswith("xalgospp.pc")), None
+        )
+        if not pc_path_in_whl:
+            return
+
+        pc_content: str = z.read(pc_path_in_whl).decode("utf-8")
+
+        repaired_libs: List[str] = [
+            f
+            for f in z.namelist()
+            if re.search(r"xalgospp[a-zA-Z0-9_\-]*\.lib", f)
+            or re.search(r"devxalgospp[a-zA-Z0-9_\-]*\.lib", f)
+        ]
+
+    if repaired_libs and pc_content:
+        pc_dir: str = os.path.dirname(pc_path_in_whl)
+        updated_libs: List[str] = []
+        for lib in repaired_libs:
+            rel_lib_path: str = os.path.relpath(lib, start=pc_dir).replace("\\", "/")
+            updated_libs.append(rel_lib_path)
+
+        new_link_str: str = " ".join(f"${{pcfiledir}}/{rl}" for rl in updated_libs)
+        updated_content: str = re.sub(r"Libs:.*", f"Libs: {new_link_str}", pc_content)
+
+        temp_whl: str = whl_path + ".tmp"
+        with zipfile.ZipFile(whl_path, "r") as zin:
+            with zipfile.ZipFile(temp_whl, "w", compression=zin.compression) as zout:
+                for item in zin.infolist():
+                    if item.filename == pc_path_in_whl:
+                        zout.writestr(item, updated_content.encode("utf-8"))
+                    else:
+                        zout.writestr(item, zin.read(item.filename))
+        os.replace(temp_whl, whl_path)
+
+
+def copy_lib_files(whl_path: str, install_lib_dir: str):
+    with zipfile.ZipFile(whl_path, "r") as z:
+        pc_path_in_whl = next(
+            (f for f in z.namelist() if f.endswith("xalgospp.pc")), None
+        )
+        if not pc_path_in_whl:
+            return
+
+        dlls: List[str] = [
+            f
+            for f in z.namelist()
+            if "xalgospp" in os.path.basename(f) and f.endswith(".dll")
+        ]
+        if not dlls:
+            return
+
+        dll_dir_in_whl: str = os.path.dirname(dlls[0])
+
+    with zipfile.ZipFile(whl_path, "a") as z:
+        for lib_file in glob.glob(os.path.join(install_lib_dir, "*.lib")):
+            lib_name: str = os.path.basename(lib_file)
+            if "xalgospp" in lib_name:
+                target_in_whl: str = (
+                    f"{dll_dir_in_whl}/{lib_name}" if dll_dir_in_whl else lib_name
+                )
+                print(f"  Adding import library {lib_name} -> {target_in_whl}")
+                z.write(lib_file, target_in_whl)
 
 
 def main():
@@ -23,7 +92,7 @@ def main():
     bin_dir: str = os.path.normpath(os.path.join(root_dir, "install", "bin"))
     lib_dir: str = os.path.normpath(os.path.join(root_dir, "install", "lib"))
 
-    delvewheel_cmd: List[str] = ["delvewheel", "repair"]
+    delvewheel_cmd: List[str] = ["delvewheel", "repair", "--include-imports"]
     delvewheel_cmd.extend(
         [
             "--no-dll",
@@ -122,6 +191,7 @@ def main():
     delvewheel_cmd.extend(["-w", dest_dir, wheel_path])
 
     subprocess.run(delvewheel_cmd, check=True)
+    update_pc_in_repaired_wheel(whl_path=wheel_path)
 
 
 if __name__ == "__main__":
