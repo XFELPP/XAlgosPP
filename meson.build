@@ -2,7 +2,7 @@ project(
     'xalgospp',
     'c',
     'cpp',
-    version: '0.1.0',
+    version: '0.1.1',
     meson_version: '>=1.10.0',
     default_options: [
         'c_std=c17',
@@ -215,8 +215,8 @@ if not cpp_httplib_dep.found()
     if host_machine.system() != 'windows'
         add_global_arguments('-D_GNU_SOURCE', language: 'c')
     endif
-    brotli_proj = subproject('google-brotli')
-    zlib_proj = subproject('zlib')
+    brotli_proj = subproject('google-brotli', default_options: ['default_library=static'])
+    zlib_proj = subproject('zlib', default_options: ['default_library=static'])
 
     # Now build
     cpp_httplib_proj = subproject('cpp-httplib')
@@ -315,8 +315,38 @@ libncarray = cpp.find_library('ncarray', required: false)
 if libncarray.found()
     ncarray_dep = libncarray
 else
-    message('ncarray not found via `find_library` - checking via Python')
-    nc_libs_cmd = '''
+    message('ncarray not found via `find_library` - checking via Python pkg-config helper')
+    nca_pkg_config_bin = find_program('nca-pkg-config', required: false)
+    if nca_pkg_config_bin.found()
+        nc_pc_path_cmd_res = run_command(
+            nca_pkg_config_bin, '--pkg-config-path',
+            check: false,
+        )
+        nc_pc_path = nc_pc_path_cmd_res.stdout().strip()
+        if (nc_pc_path_cmd_res.returncode() == 0) and (nc_pc_path != '' and nc_pc_path != 'None')
+            nca_inc_rel_pc = nc_pc_path + '/../include'
+            nc_cflags = run_command(
+                nca_pkg_config_bin, '--pkg-config-cflags',
+                check: false,
+            ).stdout().strip().replace('${includedir}', nca_inc_rel_pc)
+            message('**** Using these NCArray compile args: ' + nc_cflags)
+
+            nc_libs = run_command(
+                nca_pkg_config_bin, '--pkg-config-libs',
+                check: false,
+            ).stdout().strip().replace('${pcfiledir}', nc_pc_path)
+            message('**** Using these NCArray link args: ' + nc_libs)
+
+            ncarray_dep = declare_dependency(
+                compile_args: nc_cflags.split(),
+                link_args: nc_libs.split(),
+            )
+        endif
+    endif
+
+    if not is_variable('ncarray_dep')
+        message('ncarray not found via pkg-config helper - checking via Python lib and inc getters')
+        nc_libs_cmd = '''
 import glob
 import os
 from typing import List, Set
@@ -328,56 +358,54 @@ files: Set[str] = set(glob.glob(os.path.join(d, "*")))
 libs: List[str] = [f for f in files if f.endswith((".so", ".dylib", ".dll", ".lib")) or ".so." in f]
 
 if any(f.endswith(".lib") for f in libs):
-    libs = [f for f in libs if f.endswith(".lib")]
+    libs = [f for f in libs if not f.endswith(".dll")]
 print(";".join(libs).replace("\r", ""))
 '''
 
-    nc_cmd_res = run_command(
-        py3, '-c', nc_libs_cmd,
-        check: false,
-    )
-    message('NCArray Python Lib Search RETURNCODE: ' + nc_cmd_res.returncode().to_string())
-    message('NCArray Python Lib Search STDOUT: ' + nc_cmd_res.stdout())
-    message('NCArray Python Lib Search STDERR: ' + nc_cmd_res.stderr())
-
-    nc_libs_raw = nc_cmd_res.stdout().strip().split(';')
-
-    if (nc_libs_raw.length() == 0) or (nc_libs_raw.length() == 1  and nc_libs_raw[0] == '')
-        message('ncarray not found via Python - will use subproject.')
-        ncarray_proj = subproject('ncarray')
-        ncarray_dep = ncarray_proj.get_variable('ncarray_dep')
-    else
-        fs = import('fs')
-        nc_link_args = []
-        foreach lib : nc_libs_raw
-            if lib != ''
-                if 'libpython' in lib or lib.endswith('/Python')
-                    message('Skipping ' + lib + ' from ncarray list. Causes problem on macOS!')
-                else
-                    if not lib.endswith('.dll') # Windows guard....
-                        nc_link_args += [lib]
-                    endif
-                endif # macOS Python wheel repair guard.....
-            endif
-        endforeach
-
-
-        nc_inc_cmd_res = run_command(
-            py3, '-c', 'import ncarray; print(ncarray.get_include())',
+        nc_cmd_res = run_command(
+            py3, '-c', nc_libs_cmd,
             check: false,
         )
+        message('NCArray Python Lib Search RETURNCODE: ' + nc_cmd_res.returncode().to_string())
+        message('NCArray Python Lib Search STDOUT: ' + nc_cmd_res.stdout())
+        message('NCArray Python Lib Search STDERR: ' + nc_cmd_res.stderr())
 
-        message('NCArray Python Include Search RETURNCODE: ' + nc_inc_cmd_res.returncode().to_string())
-        message('NCArray Python Include Search STDOUT: ' + nc_inc_cmd_res.stdout())
-        message('NCArray Python Include Search STDERR: ' + nc_inc_cmd_res.stderr())
+        nc_libs_raw = nc_cmd_res.stdout().strip().split(';')
 
-        nc_inc = nc_inc_cmd_res.stdout().strip()
+        if (nc_libs_raw.length() == 0) or (nc_libs_raw.length() == 1  and nc_libs_raw[0] == '')
+            message('ncarray not found via Python - will use subproject.')
+            ncarray_proj = subproject('ncarray')
+            ncarray_dep = ncarray_proj.get_variable('ncarray_dep')
+        else
+            fs = import('fs')
+            nc_link_args = []
+            foreach lib : nc_libs_raw
+                if lib != ''
+                    if 'libpython' in lib or lib.endswith('/Python')
+                        message('Skipping ' + lib + ' from ncarray list. Causes problem on macOS!')
+                    else
+                        nc_link_args += [lib]
+                    endif # macOS Python wheel repair guard.....
+                endif
+            endforeach
 
-        ncarray_dep = declare_dependency(
-            link_args: nc_link_args,
-            include_directories: include_directories(nc_inc),
-        )
-    endif # if nca_libs_raw empty (Python search for ncarray)
+            nc_inc_cmd_res = run_command(
+                py3, '-c', 'import ncarray; print(ncarray.get_include())',
+                check: false,
+            )
+
+            message('NCArray Python Include Search RETURNCODE: ' + nc_inc_cmd_res.returncode().to_string())
+            message('NCArray Python Include Search STDOUT: ' + nc_inc_cmd_res.stdout())
+            message('NCArray Python Include Search STDERR: ' + nc_inc_cmd_res.stderr())
+
+            nc_inc = nc_inc_cmd_res.stdout().strip()
+
+            ncarray_dep = declare_dependency(
+                link_args: nc_link_args,
+                include_directories: include_directories(nc_inc),
+            )
+        endif # if nca_libs_raw empty (Python search for ncarray)
+    endif # nca-pkg-config helper
 endif
 deps_for_xalgospp += ncarray_dep
 
@@ -419,22 +447,47 @@ if libsbio.found()
         dependencies: sbio_deps,
     )
 else
-    message('sbio not found via `find_library` - checking via Python')
-    sbio_libs_cmd = '''
+    message('sbio not found via `find_library` - checking via Python pkg-config helper')
+    sbio_pkg_config_bin = find_program('sbio-pkg-config', required: false)
+    if sbio_pkg_config_bin.found()
+        sbio_pc_path_cmd_res = run_command(
+            sbio_pkg_config_bin, '--pkg-config-path',
+            check: false,
+        )
+        sbio_pc_path = sbio_pc_path_cmd_res.stdout().strip()
+        if (sbio_pc_path_cmd_res.returncode() == 0) and (sbio_pc_path != '' and sbio_pc_path != 'None')
+            sbio_inc_rel_pc = sbio_pc_path + '/../include'
+            # The wheel repair should provide the feature macros (-DSBIO_HAS_XTC2 etc)
+            # --> Do not need to check for any other libs if we find sbio this way then
+            sbio_cflags = run_command(
+                sbio_pkg_config_bin, '--pkg-config-cflags',
+                check: false,
+            ).stdout().strip().replace('${includedir}', sbio_inc_rel_pc)
+            message('**** Using these sbio compile args: ' + sbio_cflags)
+
+            # The wheel repair process should correct the lib paths
+            sbio_libs = run_command(
+                sbio_pkg_config_bin, '--pkg-config-libs',
+                check: false,
+            ).stdout().strip().replace('${pcfiledir}', sbio_pc_path)
+            message('**** Using these sbio link args: ' + sbio_libs)
+
+            # NOTE: Again, the wheel repair will include all feature flags and libs
+            #       Don't need to search for various libraries, or define macros.
+            sbio_dep = declare_dependency(
+                compile_args: sbio_cflags.split(),
+                link_args: sbio_libs.split(),
+            )
+        endif
+    endif
+
+    if not is_variable('sbio_dep')
+        sbio_libs_cmd = '''
 import ctypes
 import glob
 import os
 import platform
 from typing import List, Set
-
-if platform.system() == "Darwin":
-    try:
-        import ctypes.util
-        mpi_lib = ctypes.util.find_library("mpi")
-        if mpi_lib:
-            ctypes.CDLL(mpi_lib, mode=ctypes.RTLD_GLOBAL)
-    except Exception:
-        pass
 
 import sbio
 
@@ -445,71 +498,72 @@ libs: List[str] = [f for f in files if f.endswith((".so", ".dylib", ".dll", ".li
 if any(f.endswith(".lib") for f in libs):
     libs = [f for f in libs if f.endswith(".lib")]
 print(";".join(libs).replace("\r", ""))
-'''
+    '''
 
-    sbio_cmd_res = run_command(
-        py3, '-c',
-        sbio_libs_cmd,
-        check: false,
-    )
-    message('SBIO Python Lib Search RETURNCODE: ' + sbio_cmd_res.returncode().to_string())
-    message('SBIO Python Lib Search STDOUT: ' + sbio_cmd_res.stdout())
-    message('SBIO Python Lib Search STDERR: ' + sbio_cmd_res.stderr())
-
-    sbio_libs_raw = sbio_cmd_res.stdout().strip().split(';')
-
-    if (sbio_libs_raw.length() == 0) or (sbio_libs_raw.length() == 1 and sbio_libs_raw[0] == '')
-        message('sbio not found via Python - will use subproject.')
-        sbio_proj = subproject('sbio')
-        sbio_dep = sbio_proj.get_variable('sbio_dep')
-        sbio_fmts = sbio_proj.get_variable('sbio_enabled_formats')['formats']
-        if 'xtc1' in sbio_fmts
-            message('Enabling XTC1 support as it was built by sbio')
-            add_project_arguments('-DSBIO_HAS_XTC1', language: ['cpp', 'cuda'])
-        endif
-        if 'xtc2' in sbio_fmts
-            message('Enabling XTC2 support as it was built by sbio')
-            add_project_arguments('-DSBIO_HAS_XTC2', language: ['cpp', 'cuda'])
-        endif
-    else
-        fs = import('fs')
-        sbio_link_args = []
-        foreach lib : sbio_libs_raw
-            if lib != ''
-                if 'libpython' in lib or lib.endswith('/Python')
-                    message('Skipping ' + lib + ' from sbio list. Causes problem on macOS!')
-                else
-                    libname = fs.name(lib)
-                    if libname.contains('xtc1')
-                        add_project_arguments('-DSBIO_HAS_XTC1', language: ['cpp', 'cuda'])
-                    endif
-
-                    if libname.contains('xtc2')
-                        add_project_arguments('-DSBIO_HAS_XTC2', language: ['cpp', 'cuda'])
-                    endif
-                    if not lib.endswith('.dll') # Windows guard....
-                        sbio_link_args += [lib]
-                    endif
-                endif # macOS Python wheel repair guard.....
-            endif
-        endforeach
-
-        sbio_inc_cmd_res = run_command(
-            py3, '-c', 'import sbio; print(sbio.get_include())',
+        sbio_cmd_res = run_command(
+            py3, '-c',
+            sbio_libs_cmd,
             check: false,
         )
+        message('SBIO Python Lib Search RETURNCODE: ' + sbio_cmd_res.returncode().to_string())
+        message('SBIO Python Lib Search STDOUT: ' + sbio_cmd_res.stdout())
+        message('SBIO Python Lib Search STDERR: ' + sbio_cmd_res.stderr())
 
-        message('SBIO Python Include Search RETURNCODE: ' + sbio_inc_cmd_res.returncode().to_string())
-        message('SBIO Python Include Search STDOUT: ' + sbio_inc_cmd_res.stdout())
-        message('SBIO Python Include Search STDERR: ' + sbio_inc_cmd_res.stderr())
+        sbio_libs_raw = sbio_cmd_res.stdout().strip().split(';')
 
-        sbio_inc = sbio_inc_cmd_res.stdout().strip()
+        if (sbio_libs_raw.length() == 0) or (sbio_libs_raw.length() == 1 and sbio_libs_raw[0] == '')
+            message('sbio not found via Python - will use subproject.')
+            sbio_proj = subproject('sbio')
+            sbio_dep = sbio_proj.get_variable('sbio_dep')
+            sbio_fmts = sbio_proj.get_variable('sbio_enabled_formats')['formats']
+            if 'xtc1' in sbio_fmts
+                message('Enabling XTC1 support as it was built by sbio')
+                add_project_arguments('-DSBIO_HAS_XTC1', language: ['cpp', 'cuda'])
+            endif
+            if 'xtc2' in sbio_fmts
+                message('Enabling XTC2 support as it was built by sbio')
+                add_project_arguments('-DSBIO_HAS_XTC2', language: ['cpp', 'cuda'])
+            endif
+        else
+            fs = import('fs')
+            sbio_link_args = []
+            foreach lib : sbio_libs_raw
+                if lib != ''
+                    if 'libpython' in lib or lib.endswith('/Python')
+                        message('Skipping ' + lib + ' from sbio list. Causes problem on macOS!')
+                    else
+                        libname = fs.name(lib)
+                        if libname.contains('xtc1')
+                            add_project_arguments('-DSBIO_HAS_XTC1', language: ['cpp', 'cuda'])
+                        endif
 
-        sbio_dep = declare_dependency(
-            link_args: sbio_link_args,
-            include_directories: include_directories(sbio_inc),
-        )
-    endif # if sbio_libs_raw empty (Python search for sbio)
+                        if libname.contains('xtc2')
+                            add_project_arguments('-DSBIO_HAS_XTC2', language: ['cpp', 'cuda'])
+                        endif
+                        if not lib.endswith('.dll') # Windows guard....
+                            sbio_link_args += [lib]
+                        endif
+                    endif # macOS Python wheel repair guard.....
+                endif
+            endforeach
+
+            sbio_inc_cmd_res = run_command(
+                py3, '-c', 'import sbio; print(sbio.get_include())',
+                check: false,
+            )
+
+            message('SBIO Python Include Search RETURNCODE: ' + sbio_inc_cmd_res.returncode().to_string())
+            message('SBIO Python Include Search STDOUT: ' + sbio_inc_cmd_res.stdout())
+            message('SBIO Python Include Search STDERR: ' + sbio_inc_cmd_res.stderr())
+
+            sbio_inc = sbio_inc_cmd_res.stdout().strip()
+
+            sbio_dep = declare_dependency(
+                link_args: sbio_link_args,
+                include_directories: include_directories(sbio_inc),
+            )
+        endif # if sbio_libs_raw empty (Python search for sbio)
+    endif # sbio-pkg-config helper
 endif
 deps_for_xalgospp += sbio_dep
 

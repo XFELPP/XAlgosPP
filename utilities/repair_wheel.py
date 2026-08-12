@@ -2,16 +2,67 @@
 import glob
 import os
 import re
-import site
-import sys
+import shutil
 import subprocess
+import sys
+import tempfile
 import zipfile
-from typing import Dict, List
+from typing import Dict, List, Optional, Tuple
+
+
+def unmangle_wheel_libs_linux(
+    whl_path: str, prefixes: Tuple[str, ...] = ("libxalgospp", "libdevxalgospp")
+):
+    tmp_dir: str = tempfile.mkdtemp(prefix="unmangle_whl_")
+    try:
+        with zipfile.ZipFile(whl_path, "r") as z:
+            z.extractall(tmp_dir)
+
+        rename_map: Dict[str, str] = {}
+        for root, _, files in os.walk(tmp_dir):
+            for f in files:
+                if f.endswith(".so") or ".so." in f:
+                    for p in prefixes:
+                        if f.startswith(p):
+                            clean_name: str = re.sub(r"-[0-9a-f]{8,}", "", f)
+                            if clean_name != f:
+                                old_path: str = os.path.join(root, f)
+                                new_path: str = os.path.join(root, clean_name)
+                                os.rename(old_path, new_path)
+                                rename_map[f] = clean_name
+
+                                subprocess.run(
+                                    ["patchelf", "--set-soname", clean_name, new_path],
+                                    check=False,
+                                )
+                            break
+        if not rename_map:
+            return
+
+        for root, _, files in os.walk(tmp_dir):
+            for f in files:
+                if f.endswith(".so") or ".so." in f:
+                    so_path: str = os.path.join(root, f)
+                    for mangled_name, clean_name in rename_map.items():
+                        subprocess.run(
+                            [
+                                "patchelf",
+                                "--replace-needed",
+                                mangled_name,
+                                clean_name,
+                                so_path,
+                            ],
+                            check=False,
+                        )
+        shutil.make_archive(whl_path.replace(".whl", ""), "zip", tmp_dir)
+        os.replace(whl_path.replace(".whl", ".zip"), whl_path)
+    finally:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
 
 
 def update_pc_in_repaired_wheel(whl_path: str):
     with zipfile.ZipFile(whl_path, "r") as z:
-        pc_path_in_whl: str = next(
+        pc_path_in_whl: Optional[str] = next(
             (f for f in z.namelist() if f.endswith("xalgospp.pc")), None
         )
         if not pc_path_in_whl:
@@ -19,12 +70,13 @@ def update_pc_in_repaired_wheel(whl_path: str):
 
         pc_content: str = z.read(pc_path_in_whl).decode("utf-8")
 
+        # NOTE: Use basename to avoid excluding `xalgospp.libs`
         repaired_libs: List[str] = [
             f
             for f in z.namelist()
             if re.search(
                 r"^(lib)?(xalgospp|devxalgospp)[a-zA-Z0-9_.\-]*\.(so|dylib|dll)",
-                f,
+                os.path.basename(f),
             )
         ]
 
@@ -35,8 +87,23 @@ def update_pc_in_repaired_wheel(whl_path: str):
             rel_lib_path: str = os.path.relpath(lib, start=pc_dir).replace("\\", "/")
             updated_libs.append(rel_lib_path)
 
+        # Update the includedir and libdir to point inside the wheel
+        # Leave prefix as is I guess?
+        whl_inc_dir: str = os.path.normpath(f"{pc_dir}/../include")
+        rel_inc_dir: str = os.path.relpath(whl_inc_dir, start=pc_dir).replace("\\", "/")
+
+        whl_lib_dir: str = os.path.normpath(os.path.dirname(repaired_libs[0]))
+        rel_lib_dir: str = os.path.relpath(whl_lib_dir, start=pc_dir).replace("\\", "/")
+
+        updated_content: str = re.sub(
+            r"includedir=.*", f"includedir=${{pcfiledir}}/{rel_inc_dir}", pc_content
+        )
+        updated_content = re.sub(
+            r"libdir=.*", f"libdir=${{pcfiledir}}/{rel_lib_dir}", updated_content
+        )
+
         new_link_str: str = " ".join(f"${{pcfiledir}}/{rl}" for rl in updated_libs)
-        updated_content: str = re.sub(r"Libs:.*", f"Libs: {new_link_str}", pc_content)
+        updated_content = re.sub(r"Libs:.*", f"Libs: {new_link_str}", updated_content)
 
         temp_whl: str = whl_path + ".tmp"
         with zipfile.ZipFile(whl_path, "r") as zin:
@@ -108,9 +175,6 @@ def main():
         prefixes: List[bytes] = [
             b"ncarray",
             b"ncdevarray",
-            b"mpi",
-            b"mpich",
-            b"pciaccess",
             b"sbio",
             b"devsbio",
             b"xtc",
@@ -155,9 +219,6 @@ def main():
         linux_excludes: List[str] = [
             "libncarray*",
             "libncdevarray*",
-            "libmpi*",
-            "libmpich*",
-            "libpciaccess*",
             "libsbio*",
             "libdevsbio*",
             "libxtc*",
@@ -210,7 +271,7 @@ def main():
                 "--exclude",
                 "libcuda.so.1",
                 "--lib-sdir",
-                ".",
+                ".libs",
                 "-w",
                 dest_dir,
                 wheel_path,
@@ -270,6 +331,8 @@ def main():
                         print(f"  Adding {real_file} -> {target_path}")
                         z.write(real_file, target_path)
 
+            if sys.platform != "darwin":
+                unmangle_wheel_libs_linux(whl_path=whl)
             update_pc_in_repaired_wheel(whl_path=whl)
 
 

@@ -1,6 +1,6 @@
 [wrap-git]
 url = https://github.com/XFELPP/ncarray.git
-revision = v0.7.4
+revision = v0.7.6
 depth = 1
 
 [provide]

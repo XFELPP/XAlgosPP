@@ -10,7 +10,7 @@ from typing import List, Optional
 
 def update_pc_in_repaired_wheel(whl_path: str):
     with zipfile.ZipFile(whl_path, "r") as z:
-        pc_path_in_whl: str = next(
+        pc_path_in_whl: Optional[str] = next(
             (f for f in z.namelist() if f.endswith("xalgospp.pc")), None
         )
         if not pc_path_in_whl:
@@ -18,10 +18,13 @@ def update_pc_in_repaired_wheel(whl_path: str):
 
         pc_content: str = z.read(pc_path_in_whl).decode("utf-8")
 
+        # NOTE: Use basename to avoid matching for the directory `xalgospp.libs/<lib>.dll`
         repaired_libs: List[str] = [
             f
             for f in z.namelist()
-            if re.search(r"(lib)?(dev)?(xalgospp)[a-zA-Z0-9_.\-]*\.lib", f)
+            if re.search(
+                r"(lib)?(dev)?(xalgospp)[a-zA-Z0-9_.\-]*\.lib", os.path.basename(f)
+            )
         ]
 
     if repaired_libs and pc_content:
@@ -31,8 +34,23 @@ def update_pc_in_repaired_wheel(whl_path: str):
             rel_lib_path: str = os.path.relpath(lib, start=pc_dir).replace("\\", "/")
             updated_libs.append(rel_lib_path)
 
+        # Update the includedir and libdir to point inside the wheel
+        # Leave prefix as is I guess?
+        whl_inc_dir: str = os.path.normpath(f"{pc_dir}/../include")
+        rel_inc_dir: str = os.path.relpath(whl_inc_dir, start=pc_dir).replace("\\", "/")
+
+        whl_lib_dir: str = os.path.normpath(os.path.dirname(repaired_libs[0]))
+        rel_lib_dir: str = os.path.relpath(whl_lib_dir, start=pc_dir).replace("\\", "/")
+
+        updated_content: str = re.sub(
+            r"includedir=.*", f"includedir=${{pcfiledir}}/{rel_inc_dir}", pc_content
+        )
+        updated_content = re.sub(
+            r"libdir=.*", f"libdir=${{pcfiledir}}/{rel_lib_dir}", updated_content
+        )
+
         new_link_str: str = " ".join(f"${{pcfiledir}}/{rl}" for rl in updated_libs)
-        updated_content: str = re.sub(r"Libs:.*", f"Libs: {new_link_str}", pc_content)
+        updated_content = re.sub(r"Libs:.*", f"Libs: {new_link_str}", updated_content)
 
         temp_whl: str = whl_path + ".tmp"
         with zipfile.ZipFile(whl_path, "r") as zin:
@@ -66,24 +84,35 @@ def main():
     delvewheel_cmd.extend(
         [
             "--no-dll",
-            "ncarray-1.dll",
+            "ncarray.dll",
             "--no-dll",
-            "ncdevarray-1.dll",
+            "ncdevarray.dll",
             "--no-dll",
-            "ncarrayjit-1.dll",
+            "ncarrayjit.dll",
             "--no-dll",
-            "sbio-1.dll",
+            "sbio.dll",
             "--no-dll",
-            "xtc1slim-1.dll",
+            "xtc1slim.dll",
             "--no-dll",
-            "xtc2slim-1.dll",
+            "xtc2slim.dll",
         ]
     )
     if not no_exclude_core:
         delvewheel_cmd.extend(
             [
                 "--no-dll",
-                "xalgospp-1.dll",
+                "xalgospp.dll",
+                "--no-dll",
+                "devxalgospp.dll",
+            ]
+        )
+    else:
+        delvewheel_cmd.extend(
+            [
+                "--no-mangle",
+                "xalgospp.dll",
+                "--no-mangle",
+                "devxalgospp.dll",
             ]
         )
 
