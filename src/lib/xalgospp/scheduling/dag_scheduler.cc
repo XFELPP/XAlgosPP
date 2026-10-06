@@ -26,6 +26,7 @@
 #include <spdlog/sinks/stdout_color_sinks.h>
 #include <spdlog/spdlog.h>
 
+#include <atomic>
 #include <chrono>
 #include <cstddef>
 #include <exception>
@@ -73,17 +74,36 @@
 namespace fs = std::filesystem;
 
 namespace xalgospp::scheduling {
+  namespace {
+    thread_local std::size_t t_worker_id { 0 };
+  } // anonymous namespace
+
   DagScheduler::DagScheduler(DagScheduler::Config cfg)
     : m_config(cfg)
   {
     int mpi_initialized { 0 };
     MPI_Initialized(&mpi_initialized);
     if (mpi_initialized) {
-      m_world_comm = MPI_COMM_WORLD;
+      // Don't interfere with user comm
+      MPI_Comm_dup(MPI_COMM_WORLD, &m_world_comm);
       MPI_Comm_rank(m_world_comm, &m_world_rank);
       MPI_Comm_size(m_world_comm, &m_world_size);
+
+      // Use a node-local comm for autotuning - determine once one main thread
+      MPI_Comm node_comm { MPI_COMM_NULL };
+      MPI_Comm_split_type(m_world_comm,
+                          MPI_COMM_TYPE_SHARED,
+                          0,
+                          MPI_INFO_NULL,
+                          &node_comm);
+      if (node_comm != MPI_COMM_NULL) {
+        MPI_Comm_size(node_comm, &m_local_size);
+        MPI_Comm_free(&node_comm);
+      }
     }
 
+    m_max_concurrent_high_mem.store(m_config.max_concurrent_high_mem);
+    m_max_concurrency_multiplier.store(m_config.max_concurrency_multiplier);
 
     spdlog::cfg::load_env_levels("XALGOSPP_DAG_LOG_LEVEL");
     std::string logger_name { "XAlgosPP::Scheduling::DagScheduler" };
@@ -122,6 +142,12 @@ namespace xalgospp::scheduling {
       m_logger->debug("Creating queue for NUMA node {}.", i);
       m_node_queues.push_back(std::make_unique<WorkQueue>());
     }
+
+    for (const auto& [node_id, cores] : m_topology) {
+      m_num_workers +=
+        m_config.threads_per_node != 0 ? m_config.threads_per_node : cores.size();
+    }
+    m_workers.reserve(m_num_workers);
 
     m_logger->info("Launching workers for each queue.");
     // Launch worker threads
@@ -179,6 +205,10 @@ namespace xalgospp::scheduling {
         }
       }
       m_shmem_comms.clear();
+
+      if (m_world_comm != MPI_COMM_NULL) {
+        MPI_Comm_free(&m_world_comm);
+      }
     }
   }
 
@@ -267,7 +297,7 @@ namespace xalgospp::scheduling {
     std::size_t total_workers { m_workers.size() };
     std::size_t unfinished { m_unfinished_tasks.load(std::memory_order_acquire) };
 
-    return unfinished >= total_workers * m_config.max_concurrency_multiplier;
+    return unfinished >= m_num_workers * m_max_concurrency_multiplier.load(std::memory_order_relaxed);
   }
 
   std::size_t DagScheduler::get_system_ram_bytes() {
@@ -289,32 +319,10 @@ namespace xalgospp::scheduling {
     std::size_t system_ram { get_system_ram_bytes() };
 
     // Account for MPI world - specifically, ranks on this same node
-    int local_size { 1 };
-    if (m_world_comm != MPI_COMM_NULL) {
-      // If we staged Algorithms, the first of m_shmem_comms is the node-level comm
-      if (!m_shmem_comms.empty()) {
-        auto& node_comm = m_shmem_comms[0];
-
-        MPI_Comm_size(node_comm, &local_size);
-      } else {
-        // Otherwise, we will create one
-        MPI_Comm node_comm { MPI_COMM_NULL };
-        MPI_Comm_split_type(m_world_comm,
-                            MPI_COMM_TYPE_SHARED,
-                            0,
-                            MPI_INFO_NULL,
-                            &node_comm);
-        if (node_comm != MPI_COMM_NULL) {
-          MPI_Comm_size(node_comm, &local_size);
-          MPI_Comm_free(&node_comm);
-        } else {
-          m_logger->error("Tried to create a node-local communicator but failed!");
-        }
-      }
-    }
+    int local_size { m_local_size };
     system_ram /= local_size;
 
-    std::size_t total_workers { m_workers.size() };
+    std::size_t total_workers { m_num_workers };
 
     std::size_t raw_frame_size { m_config.raw_frame_size_bytes };
 
@@ -360,10 +368,10 @@ namespace xalgospp::scheduling {
     target_steps = std::max(target_steps, min_steps);
 
     std::size_t tasks_per_step { 3 };
-    m_config.max_concurrency_multiplier =
+    std::size_t concurrency_multiplier =
       std::ceil(static_cast<double>(target_steps * tasks_per_step) / total_workers);
-    m_config.max_concurrency_multiplier =
-      std::max(std::size_t(4), m_config.max_concurrency_multiplier);
+    concurrency_multiplier = std::max(std::size_t(4), concurrency_multiplier);
+    m_max_concurrency_multiplier.store(concurrency_multiplier, std::memory_order_relaxed);
 
     // Bandwidth limit calculation uses bytes accessed as (1 * read + multiplier * written)
     double task_traffic_gb {
@@ -384,10 +392,11 @@ namespace xalgospp::scheduling {
     }
     threads_per_node = std::max(std::size_t(1), threads_per_node);
 
-    m_config.max_concurrent_high_mem =
+    std::size_t max_concurrent_high_mem =
       std::min(threads_per_node,
                std::max(std::size_t(1),
                         static_cast<std::size_t>(std::floor(max_concurrent_tasks_by_bandwidth))));
+    m_max_concurrent_high_mem.store(max_concurrent_high_mem, std::memory_order_relaxed);
 
     m_logger->info("[Autotuner] Learned stats: T_io = {:.3f} ms, T_downstream = {:.3f} ms, Task "
                    "Bandwidth = {:.2f} GB/s",
@@ -395,14 +404,13 @@ namespace xalgospp::scheduling {
                    t_downstream * 1000.0,
                    task_bandwidth_gbps);
     m_logger->info("[Autotuner] Tuned max_concurrency_multiplier to {} (Target steps in flight: {})",
-                   m_config.max_concurrency_multiplier,
+                   concurrency_multiplier,
                    target_steps);
     m_logger->info("[Autotuner] Tuned max_concurrent_high_mem to {} (Node limit: {} GB/s, "
                    "Concurrent by bandwidth: {:.2f})",
-                   m_config.max_concurrent_high_mem,
+                   max_concurrent_high_mem,
                    node_bandwidth_limit,
                    max_concurrent_tasks_by_bandwidth);
-    m_config.enable_autotuning = false;
   }
 
   void DagScheduler::record_task_metrics(std::shared_ptr<Task> task,
@@ -416,8 +424,20 @@ namespace xalgospp::scheduling {
       m_io_profile.count.fetch_add(1, std::memory_order_relaxed);
       m_io_profile.total_execution_time_ns.fetch_add(elapsed_ns, std::memory_order_relaxed);
     } else {
-      m_compute_profile.count.fetch_add(1, std::memory_order_relaxed);
+      std::size_t count {
+        m_compute_profile.count.fetch_add(1, std::memory_order_relaxed) + 1
+      };
+
       m_compute_profile.total_execution_time_ns.fetch_add(elapsed_ns, std::memory_order_relaxed);
+      // Autotune once, using worker that completes warmup
+      if (m_config.enable_autotuning                                   &&
+          count >= m_config.warmup_submissions                         &&
+          !m_autotune_started.exchange(true, std::memory_order_acq_rel)) {
+        perform_autotune();
+
+        // Switch back to normal submission now
+        m_profiling_phase.store(false, std::memory_order_release);
+      }
     }
   }
 
@@ -459,42 +479,20 @@ namespace xalgospp::scheduling {
   void DagScheduler::submit_dag(std::vector<std::shared_ptr<Task>> tasks) {
     m_unfinished_tasks.fetch_add(tasks.size(), std::memory_order_release);
 
-    if (m_config.enable_autotuning && m_profiling_phase.load(std::memory_order_acquire)) {
-      bool has_compute_tasks { false };
-      for (const auto& task : tasks) {
-        if (!task->is_generator() && task->resources().memory_intensity > 2) {
-          has_compute_tasks = true;
-          break;
-        }
-      }
-
-      if (has_compute_tasks) {
-        std::size_t current_submission {
-          m_submissions_count.fetch_add(1, std::memory_order_relaxed) + 1
-        };
-
-        if (current_submission == m_config.warmup_submissions) {
-          auto profile = [this]() {
-            while (m_compute_profile.count.load(std::memory_order_acquire) < m_config.warmup_submissions) {
-              std::this_thread::sleep_for(std::chrono::milliseconds(5));
-            }
-
-            perform_autotune();
-
-            // After this will just submit like normal
-            m_profiling_phase.store(false, std::memory_order_release);
-          };
-
-          std::thread(profile).detach();
-        }
+    // Check parents/roots before the enqueueing
+    // During the loop, they could run. If the children are released, they
+    // may end up getting queued a second (incorrect) time to run.
+    std::vector<std::shared_ptr<Task>> roots;
+    roots.reserve(tasks.size());
+    for (auto& task : tasks) {
+      if (task->m_pending_parents.load(std::memory_order_acquire) == 0) {
+        roots.push_back(std::move(task));
       }
     }
 
     // Only enquee tasks that are not waiting on the resolution of outstanding work
-    for (auto& task : tasks) {
-      if (task->m_pending_parents.load(std::memory_order_acquire) == 0) {
-        enqueue(task);
-      }
+    for (auto& task : roots) {
+      enqueue(std::move(task));
     }
   }
 
