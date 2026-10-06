@@ -496,6 +496,22 @@ namespace xalgospp::scheduling {
     }
   }
 
+  bool DagScheduler::throttle_generator() {
+    if (m_config.enable_dynamic_backpressure) {
+      while (m_running.load(std::memory_order_relaxed) && should_throttle_generators()) {
+        // Drain other work
+        auto [task, has_token] = find_task(g_current_numa_node, false);
+        if (task) {
+          run_task(std::move(task), has_token);
+        } else {
+          std::this_thread_sleep_for(std::chrono::microseconds(50));
+        }
+      }
+    }
+
+    return m_running.load(std::memory_order_relaxed);
+  }
+
   void DagScheduler::enqueue(std::shared_ptr<Task> task) {
     numa_node_t target_node { resolve_locality(task->locality()) };
 
@@ -508,19 +524,78 @@ namespace xalgospp::scheduling {
       }
     }
 
-    {
+    if (target_node == ANY_NODE) {
+      m_global_queue.push(std::move(task));
+    } else {
+      m_node_queues[target_node]->push(std::move(task));
+    }
+
+    notify_worker();
+  }
+
+  void DagScheduler::notify_worker() {
+    // Only grab mutex when a worker is sleeping
+    // A worker is "sleeping" before its final check on queues
+    // If a task is pushed between now and the final check, the latter can catch it
+    if (m_num_sleeping.load(std::memory_order_seq_cst) > 0) {
       std::lock_guard<std::mutex> lock(m_cv_mutex);
+      m_job_cv.notify_one();
+    }
+  }
 
-      if (target_node == ANY_NODE) {
-        // Global work queue contains work that is not specified for a specific place
-        m_global_queue.push(std::move(task));
-      } else {
-        m_node_queues[target_node]->push(std::move(task));
+  bool DagScheduler::is_high_mem(const Task& task) const {
+    if (!m_profiling_phase.load(std::memory_order_relaxed) &&
+        m_config.raw_frame_size_bytes > 0) {
+      double task_mem_gb =
+        static_cast<double>(m_config.raw_frame_size_bytes * (1 + task.resources().memory_intensity)) / 1e9;
+
+      double avg_time_s { 0.010 }; // Hard-coded fallback
+
+      std::size_t count { m_compute_profile.count.load(std::memory_order_relaxed) };
+      if (count > 0) {
+        avg_time_s =
+          static_cast<double>(m_compute_profile.total_execution_time_ns.load(std::memory_order_relaxed)) /
+          (count * 1e9);
       }
+      double task_bandwidth { task_mem_gb / avg_time_s };
 
-      // Wake up the workers to run the newly enqueued task. Notify all, first come
-      // first serve
-      m_job_cv.notify_all();
+      return
+        task_bandwidth > m_config.node_memory_bandwidth_limit_gbps * m_config.percent_bandwidth_is_high_mem;
+    }
+
+    // Fallback on arbitrary threshold of 8 for mem-bound throttling
+    return task.resources().memory_intensity >= 8;
+  }
+
+  bool DagScheduler::acquire_hm_token_blocking() {
+    if (try_acquire_hm_token()) {
+      return true;
+    }
+
+    // Pairs with release_hm_token - we count ourselves as waiting before the final
+    // try, it releases before checking for waiters so one of us sees the other
+    bool acquired { false };
+    std::unique_lock<std::mutex> lock(m_hm_mutex);
+    m_hm_waiters.fetch_add(1, std::memory_order_seq_cst);
+    m_hm_cv.wait(lock, [&]() {
+      acquired = try_acquire_hm_token();
+      return acquired || !m_running.load(std::memory_order_relaxed);
+    });
+    m_hm_waiters.fetch_sub(1, std::memory_order_relaxed);
+
+    return acquired;
+  }
+
+  void DagScheduler::release_hm_token() {
+    m_active_high_mem_tasks.fetch_sub(1, std::memory_order_seq_cst);
+
+    if (m_hm_waiters.load(std::memory_order_seq_cst) > 0) {
+      std::lock_guard<std::mutex> lock(m_hm_mutex);
+      m_hm_cv.notify_one();
+    }
+
+    if (!m_hm_deferred.empty()) {
+      notify_worker();
     }
   }
 
@@ -536,7 +611,7 @@ namespace xalgospp::scheduling {
         if (m_num_suspended_generators.load(std::memory_order_acquire) != 0) {
           return false;
         }
-        if (!m_global_queue.empty()) {
+        if (!m_global_queue.empty() || !m_hm_deferred.empty()) {
           return false;
         }
         for (const auto& q : m_node_queues) {
