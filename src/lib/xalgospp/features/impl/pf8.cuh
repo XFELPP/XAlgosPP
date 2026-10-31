@@ -25,7 +25,6 @@
 #include "xalgospp/export_macro.hh"
 
 namespace xalgospp::features::impl {
-
   /**
    * A wrapping container for image metadata: mask and radius map.
    *
@@ -35,30 +34,18 @@ namespace xalgospp::features::impl {
   struct XALG_API DevImageData {
     DevImageData() = default;
 
-    DevImageData(const DevImageData& other) = default;
-    DevImageData(DevImageData&& other) noexcept = default;
+    // No copy
+    DevImageData(const DevImageData& other) = delete;
+    DevImageData& operator=(const DevImageData& other) = delete;
 
-    DevImageData& operator=(const DevImageData& other) = default;
-    DevImageData& operator=(DevImageData&& other) noexcept = default;
+    DevImageData(DevImageData&& other) noexcept;
+    DevImageData& operator=(DevImageData&& other) noexcept;
 
-    DevImageData(int npixels)
-      : num_pixels(npixels)
-    {
-      cudaMalloc(&mask, npixels * sizeof(bool));
-      cudaMalloc(&r_map, npixels * sizeof(float));
-    }
+    DevImageData(int npixels);
 
-    ~DevImageData() {
-      if (mask) {
-        cudaFree(mask);
-        mask = nullptr;
-      }
+    ~DevImageData();
 
-      if (r_map) {
-        cudaFree(r_map);
-        r_map = nullptr;
-      }
-    }
+    void swap(DevImageData& other) noexcept;
 
     bool* mask { nullptr };   ///< Mask of good/bad pixels. 1 == valid pixel.
     float* r_map { nullptr }; ///< Radius map
@@ -75,65 +62,18 @@ namespace xalgospp::features::impl {
   struct XALG_API DevRadialStatistics {
     DevRadialStatistics() = default;
 
-    DevRadialStatistics(const DevRadialStatistics& other) = default;
-    DevRadialStatistics(DevRadialStatistics&& other) noexcept = default;
+    // No copy
+    DevRadialStatistics(const DevRadialStatistics& other) = delete;
+    DevRadialStatistics& operator=(const DevRadialStatistics& other) = delete;
 
-    DevRadialStatistics& operator=(const DevRadialStatistics& other) = default;
-    DevRadialStatistics& operator=(DevRadialStatistics&& other) noexcept = default;
+    DevRadialStatistics(DevRadialStatistics&& other) noexcept;
+    DevRadialStatistics& operator=(DevRadialStatistics&& other) noexcept;
 
-    DevRadialStatistics(int nbins)
-      : num_bins(nbins)
-    {
-      std::size_t bins_bytes { static_cast<std::size_t>(nbins * sizeof(float)) };
-      std::size_t count_bytes { static_cast<std::size_t>(nbins * sizeof(int)) };
+    DevRadialStatistics(int nbins);
 
-      cudaMalloc(reinterpret_cast<void**>(&offset), bins_bytes);
-      cudaMalloc(reinterpret_cast<void**>(&sigma), bins_bytes);
-      cudaMalloc(reinterpret_cast<void**>(&count), count_bytes);
+    ~DevRadialStatistics();
 
-      cudaMalloc(reinterpret_cast<void**>(&r_threshold), bins_bytes);
-      cudaMalloc(reinterpret_cast<void**>(&l_threshold), bins_bytes);
-
-      cudaMalloc(reinterpret_cast<void**>(&sum), bins_bytes);
-      cudaMalloc(reinterpret_cast<void**>(&sum_sq), bins_bytes);
-    }
-
-    ~DevRadialStatistics() {
-      if (offset) {
-        cudaFree(offset);
-        offset = nullptr;
-      }
-
-      if (sigma) {
-        cudaFree(sigma);
-        sigma = nullptr;
-      }
-
-      if (count) {
-        cudaFree(count);
-        count = nullptr;
-      }
-
-      if (r_threshold) {
-        cudaFree(r_threshold);
-        r_threshold = nullptr;
-      }
-
-      if (l_threshold) {
-        cudaFree(l_threshold);
-        l_threshold = nullptr;
-      }
-
-      if (sum) {
-        cudaFree(sum);
-        sum = nullptr;
-      }
-
-      if (sum_sq) {
-        cudaFree(sum_sq);
-        sum_sq = nullptr;
-      }
-    }
+    void swap(DevRadialStatistics& other) noexcept;
 
     float* offset { nullptr };      ///< Mean background offset per radial bin
     float* sigma { nullptr };       ///< Background std dev per radial bin
@@ -158,78 +98,18 @@ namespace xalgospp::features::impl {
   struct XALG_API DevPeakLabelData {
     DevPeakLabelData() = default;
 
-    DevPeakLabelData(const DevPeakLabelData& other) = default;
-    DevPeakLabelData(DevPeakLabelData&& other) noexcept = default;
+    // No copy
+    DevPeakLabelData(const DevPeakLabelData& other) = delete;
+    DevPeakLabelData& operator=(const DevPeakLabelData& other) = delete;
 
-    DevPeakLabelData& operator=(const DevPeakLabelData& other) = default;
-    DevPeakLabelData& operator=(DevPeakLabelData&& other) noexcept = default;
+    DevPeakLabelData(DevPeakLabelData&& other) noexcept;
+    DevPeakLabelData& operator=(DevPeakLabelData&& other) noexcept;
 
-    DevPeakLabelData(int npixels)
-      : num_pixels(npixels)
-    {
-      std::size_t pix_bytes { static_cast<std::size_t>(npixels * sizeof(float)) };
-      std::size_t pix_int_bytes { static_cast<std::size_t>(npixels * sizeof(int)) };
+    DevPeakLabelData(int npixels);
 
-      cudaMalloc(&labels_v1, pix_int_bytes);
-      cudaMalloc(&labels_v2, pix_int_bytes);
+    ~DevPeakLabelData();
 
-      cudaMalloc(&changed, sizeof(bool));
-
-      cudaMalloc(&label_sum_i, pix_bytes);
-      cudaMalloc(&label_sum_fs, pix_bytes);
-      cudaMalloc(&label_sum_ss, pix_bytes);
-      cudaMalloc(&label_max_i, pix_bytes);
-      cudaMalloc(&label_npix, pix_int_bytes);
-
-      cudaMalloc(&peak_count, sizeof(int));
-    }
-
-    ~DevPeakLabelData() {
-      if (labels_v1) {
-        cudaFree(labels_v1);
-        labels_v1 = nullptr;
-      }
-
-      if (labels_v2) {
-        cudaFree(labels_v2);
-        labels_v2 = nullptr;
-      }
-
-      if (changed) {
-        cudaFree(changed);
-        changed = nullptr;
-      }
-
-      if (label_sum_i) {
-        cudaFree(label_sum_i);
-        label_sum_i = nullptr;
-      }
-
-      if (label_sum_fs) {
-        cudaFree(label_sum_fs);
-        label_sum_fs = nullptr;
-      }
-
-      if (label_sum_ss) {
-        cudaFree(label_sum_ss);
-        label_sum_ss = nullptr;
-      }
-
-      if (label_max_i) {
-        cudaFree(label_max_i);
-        label_max_i = nullptr;
-      }
-
-      if (label_npix) {
-        cudaFree(label_npix);
-        label_npix = nullptr;
-      }
-
-      if (peak_count) {
-        cudaFree(peak_count);
-        peak_count = nullptr;
-      }
-    }
+    void swap(DevPeakLabelData& other) noexcept;
 
     int* labels_v1 { nullptr };      ///< Connected-component peak labels
     int* labels_v2 { nullptr };      ///< Connected-component peak labels (secondary buffer)
