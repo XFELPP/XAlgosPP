@@ -87,15 +87,15 @@ namespace xalgospp::features::impl {
       std::size_t bins_bytes { static_cast<std::size_t>(nbins * sizeof(float)) };
       std::size_t count_bytes { static_cast<std::size_t>(nbins * sizeof(int)) };
 
-      cudaMalloc(&offset, bins_bytes);
-      cudaMalloc(&sigma, bins_bytes);
-      cudaMalloc(&count, count_bytes);
+      cudaMalloc(reinterpret_cast<void**>(&offset), bins_bytes);
+      cudaMalloc(reinterpret_cast<void**>(&sigma), bins_bytes);
+      cudaMalloc(reinterpret_cast<void**>(&count), count_bytes);
 
-      cudaMalloc(&r_threshold, bins_bytes);
-      cudaMalloc(&l_threshold, bins_bytes);
+      cudaMalloc(reinterpret_cast<void**>(&r_threshold), bins_bytes);
+      cudaMalloc(reinterpret_cast<void**>(&l_threshold), bins_bytes);
 
-      cudaMalloc(&sum, bins_bytes);
-      cudaMalloc(&sum_sq, bins_bytes);
+      cudaMalloc(reinterpret_cast<void**>(&sum), bins_bytes);
+      cudaMalloc(reinterpret_cast<void**>(&sum_sq), bins_bytes);
     }
 
     ~DevRadialStatistics() {
