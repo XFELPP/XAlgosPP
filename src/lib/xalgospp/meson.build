@@ -67,6 +67,14 @@ else
         ],
         include_directories: xalgospp_headers,
     )
+
+    libdevxalgospp = cpp.find_library('devxalgospp', required: true)
+    devxalgospp_dep = declare_dependency(
+        dependencies: deps_for_xalgospp + [
+            libdevxalgospp,
+        ],
+        include_directories: xalgospp_headers,
+    )
 endif # end build_core_opt
 
 installed_headers = [
