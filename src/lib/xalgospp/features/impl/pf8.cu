@@ -62,8 +62,8 @@ namespace xalgospp::features::impl {
                                           int num_bins,
                                           float min_snr,
                                           float adc_threshold) {
-    int bin { blockIdx.x * blockDim.x + threadIdx.x };
-    if (bin >= num_bins) {
+    unsigned bin { blockIdx.x * blockDim.x + threadIdx.x };
+    if (static_cast<int>(bin) >= num_bins) {
       return;
     }
 
@@ -274,7 +274,7 @@ namespace xalgospp::features::impl {
           peak_max_i,
           snr,
           npix,
-          label
+          static_cast<int>(label)
         };
       }
     }
