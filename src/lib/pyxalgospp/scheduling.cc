@@ -40,6 +40,15 @@ typedef SSIZE_T ssize_t;
 
 namespace py = pybind11;
 
+namespace {
+  struct ReleaseGilDeleter {
+    void operator()(xalgospp::scheduling::DagScheduler* scheduler) const {
+      py::gil_scoped_release release;
+      delete scheduler;
+    }
+  };
+}
+
 PYBIND11_MODULE(scheduling, scheduling_module) {
   // NOTE: This must be accessible (in PYTHONPATH minimally!) or init will fail
   py::module_::import("ncarray");
@@ -67,43 +76,32 @@ PYBIND11_MODULE(scheduling, scheduling_module) {
     .def_readwrite("preferred_node",
                    &xalgospp::scheduling::LocalityHint::preferred_node);
 
-  py::class_<
-    xalgospp::scheduling::Task,
-    pyxalgospp::scheduling::PyTask,
-    std::shared_ptr<xalgospp::scheduling::Task>
-  >(scheduling_module, "Task")
+  using Task = xalgospp::scheduling::Task;
+  py::classh<Task, pyxalgospp::scheduling::PyTask>(scheduling_module, "Task")
     .def(py::init<>())
-    .def("execute", &xalgospp::scheduling::Task::execute)
-    .def("is_generator", &xalgospp::scheduling::Task::is_generator)
-    .def_property("data",
-                  [](xalgospp::scheduling::Task& self) -> py::object {
-                    if (auto* py_self = dynamic_cast<pyxalgospp::scheduling::PyTask*>(&self)) {
-                      return py_self->get_data();
-                    }
-                    return py::none();
-                  },
-                  [](xalgospp::scheduling::Task& self, py::object data) {
-                    if (auto* py_self = dynamic_cast<pyxalgospp::scheduling::PyTask*>(&self)) {
-                      py_self->set_data(data);
-                    }
-                  })
-    .def("locality", &xalgospp::scheduling::Task::locality)
-    .def("set_locality", &xalgospp::scheduling::Task::set_locality)
+    .def("execute", &Task::execute)
+    .def("is_generator", &Task::is_generator)
+    .def("locality", &Task::locality)
+    .def("set_locality", &Task::set_locality)
     .def("resources", &xalgospp::scheduling::Task::resources)
     .def("set_resources", &xalgospp::scheduling::Task::set_resources)
     .def("add_dependency",
-         [](py::object self_obj, py::object parent_obj) {
-           auto self_task = py::cast<std::shared_ptr<xalgospp::scheduling::Task>>(self_obj);
-           auto parent_task = py::cast<std::shared_ptr<xalgospp::scheduling::Task>>(parent_obj);
-           if (auto py_self = std::dynamic_pointer_cast<pyxalgospp::scheduling::PyTask>(self_task)) {
-             py_self->attach_python_object(self_obj);
+         [](const std::shared_ptr<Task>& self, const std::shared_ptr<Task>& parent) {
+           self->add_dependency(parent);
+           // The parent Task holds shared_from_this()
+           // PyTask uses the keep_alive_until_executed so that the Python object stays
+           // alive.
+           if (auto* py_self = dynamic_cast<pyxalgospp::scheduling::PyTask*>(self.get())) {
+             py_self->keep_alive_until_executed(self);
            }
-           if (auto py_parent = std::dynamic_pointer_cast<pyxalgospp::scheduling::PyTask>(parent_task)) {
-             py_parent->attach_python_object(parent_obj);
-           }
-           self_task->add_dependency(parent_task);
          },
-         py::arg("parent"));
+         py::arg("parent"))
+    .def_property("thread_affine_output",
+                  &Task::thread_affine_output,
+                  &Task::set_thread_affine_output,
+                  "Whether the Task output lives in thread storage. If so, then "
+                  "subsequent downstream Tasks run immediately within the same "
+                  "thread to avoid migration of data unnecessarily.");
 
   using DagScheduler = xalgospp::scheduling::DagScheduler;
   py::classh<DagScheduler::Config>(scheduling_module, "DagSchedulerConfig")
@@ -127,7 +125,10 @@ PYBIND11_MODULE(scheduling, scheduling_module) {
 
   using RtCalibration = xalgospp::det::Calibration<xalgospp::det::RuntimeCalibPolicy>;
   py::classh<DagScheduler>(scheduling_module, "DagScheduler")
-    .def(py::init<DagScheduler::Config>(), py::arg("config") = DagScheduler::Config{})
+    .def(py::init([](DagScheduler::Config config) {
+      return std::unique_ptr<DagScheduler, ReleaseGilDeleter>(new DagScheduler(config));
+    }),
+      py::arg("config") = DagScheduler::Config{})
     .def("stage_algorithm",
          [](DagScheduler& self, RtCalibration& algo, xalgospp::scheduling::ShmemType st) {
            self.stage_algorithm(algo, st);
@@ -152,6 +153,18 @@ PYBIND11_MODULE(scheduling, scheduling_module) {
          &DagScheduler::submit_dag,
          py::arg("tasks"),
          py::call_guard<py::gil_scoped_release>())
+    .def("submit_dag_inline",
+         &DagScheduler::submit_dag_inline,
+         py::arg("tasks"),
+         py::call_guard<py::gil_scoped_release>(),
+         "Run the DAG from the calling thread. The affine children run in the same "
+         "thread, while the rest is queued as normal.")
+    .def("throttle_generator",
+         &DagScheduler::throttle_generator,
+         py::call_guard<py::gil_scoped_release>(),
+         "Use backpressure to throttle generation of new IO. Returns False if the "
+         "DagScheduler is in the process of shutting down.")
+    .def_property_readonly("num_workers", &DagScheduler::num_workers)
     .def("enqueue",
          &DagScheduler::enqueue,
          py::arg("task"),
