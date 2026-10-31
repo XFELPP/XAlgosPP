@@ -118,10 +118,16 @@ shutil.copyfile(sys.argv[1], os.path.join(sys.argv[2], "config.h"))
     )
 else
     configure_opts = [
-      '--prefix=@PREFIX@',
-      '--libdir=@PREFIX@/@LIBDIR@',
-      '--disable-shared',
-      '--enable-static',
+        '--prefix=@PREFIX@',
+        '--libdir=@PREFIX@/@LIBDIR@',
+        '--disable-shared',
+        '--enable-static',
+        # Currently, only use the CPU-side hwloc (so no NUMA node GPU is on)
+        # Disable the GPU related config for simplicity
+        # TODO: NOTE: If this changes in the future, revisit setup here.
+        '--disable-io',       # No PCI/OpenCL/CUDA/NVML/RSMI/LevelZero/GL backends
+        '--disable-libxml2',  # Avoid -lxml2 in the static lib
+        '--disable-libudev',  # Avoid -ludev in teh static lib
     ]
 
     hwloc = ep.add_project(
