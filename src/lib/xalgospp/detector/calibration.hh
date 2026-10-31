@@ -120,6 +120,7 @@ namespace xalgospp::det {
       : p(p_)
       , calib_const(cc)
       , seg_offset(seg_off)
+      , epix_mapping(p_.mapping == CalibParameters::MappingMode::Epix10k)
     {
       NPIX = cc.size() / p.num_gains;
     }
@@ -131,18 +132,11 @@ namespace xalgospp::det {
       }
 
       int data { raw & p.data_mask };
-      int g_idx { 0 };
-      if (p.mapping == CalibParameters::MappingMode::Epix10k) {
-        g_idx = g_bits;
-      } else {
-        if (g_bits == 0) {
-          g_idx = 0;
-        } else if (g_bits == 1) {
-          g_idx = 1;
-        } else if (g_bits == 3 || g_bits == 2) {
-          g_idx = 2;
-        }
-      }
+
+      // This has been found to be faster than explicit branch selection
+      // in various profiling, it should still map correctly
+      int direct_idx { (g_bits - (g_bits == 3)) & -static_cast<int>(g_bits <= 3) };
+      int g_idx { epix_mapping ? g_bits : direct_idx };
 
       // Using a vector datatype for the constants, c.x is pedestal, c.y is gain
       const auto& c { calib_const[g_idx * NPIX + seg_offset + i] };
@@ -154,6 +148,7 @@ namespace xalgospp::det {
     const std::span<const PixelCalibStruct> calib_const;
     std::size_t NPIX;
     std::size_t seg_offset;
+    bool epix_mapping;
   };
 
   template <typename Policy, typename U>
@@ -166,6 +161,8 @@ namespace xalgospp::det {
     }
 
     inline U operator()(int raw, int i) const {
+      constexpr bool epix_mapping { std::is_same_v<Policy, Epix10kPolicy> };
+
       int g_bits { (raw >> Policy::GAIN_SHIFT) & Policy::GAIN_MASK };
       if constexpr (Policy::INVALID_PATTERN != -1) {
         if (g_bits == Policy::INVALID_PATTERN) {
@@ -174,14 +171,11 @@ namespace xalgospp::det {
       }
 
       int data { raw & Policy::DATA_MASK };
-      int g_idx { 0 };
-      if (g_bits == 0) {
-        g_idx = 0;
-      } else if (g_bits == 1) {
-        g_idx = 1;
-      } else if (g_bits == 3 || g_bits == 2) {
-        g_idx = 2;
-      }
+
+      // This has been found to be faster than explicit branch selection
+      // in various profiling, it should still map correctly
+      int direct_idx { (g_bits - (g_bits == 3)) & -static_cast<int>(g_bits <= 3) };
+      int g_idx { epix_mapping ? g_bits : direct_idx };
 
       // Using a vector datatype for the constants, c.x is pedestal, c.y is gain
       const auto& c { calib_const[g_idx * NPIX + seg_offset + i] };
@@ -309,7 +303,16 @@ namespace xalgospp::det {
       std::size_t constants_offset { (header_size + align - 1) & ~(align - 1) };
       std::size_t nelem { m_constants.size() };
 
-      const std::uint8_t* params_ptr { reinterpret_cast<const std::uint8_t*>(&m_params) };
+      const CalibParameters header {
+        .gain_shift = m_params.gain_shift,
+        .gain_mask = m_params.gain_mask,
+        .data_mask = m_params.data_mask,
+        .num_gains = m_params.num_gains,
+        .invalid_pattern = m_params.invalid_pattern,
+        .invalid_value = m_params.invalid_value,
+        .mapping = m_params.mapping
+      };
+      const std::uint8_t* params_ptr { reinterpret_cast<const std::uint8_t*>(&header) };
       // NOTE: m_constants is now invalid since we shifted its backing buffer
       m_serialized_data.insert(m_serialized_data.begin(),
                                params_ptr,
@@ -399,16 +402,6 @@ namespace xalgospp::det {
         }
 
         std::size_t total_elements { input.size() };
-        auto shape { input.shape() };
-        std::size_t ndim { input.ndim() };
-        std::size_t NPIX { total_elements };
-
-        if (ndim >= 3) {
-          NPIX = 1;
-          for (std::size_t d = 1; d < ndim; ++d) {
-            NPIX *= shape[d];
-          }
-        }
 
         int mapping_val { (m_params.mapping == CalibParameters::MappingMode::Epix10k) ? 1 : 0 };
 
@@ -422,7 +415,7 @@ namespace xalgospp::det {
                          m_params.invalid_pattern,
                          m_params.invalid_value,
                          mapping_val,
-                         static_cast<int>(NPIX));
+                         static_cast<int>(total_elements));
 #else
         throw std::runtime_error("[Calibration] GPU execution requested but CUDA support is disabled!");
 #endif
@@ -487,7 +480,15 @@ namespace xalgospp::det {
       std::size_t constants_offset { (header_size + align - 1) & ~(align - 1) };
 
       // First copy any parameter updates
-      std::memcpy(&m_params, buf, sizeof(CalibParameters));
+      CalibParameters header;
+      std::memcpy(&header, buf, sizeof(CalibParameters));
+      m_params.gain_shift = header.gain_shift;
+      m_params.gain_mask = header.gain_mask;
+      m_params.data_mask = header.data_mask;
+      m_params.num_gains = header.num_gains;
+      m_params.invalid_pattern = header.invalid_pattern;
+      m_params.invalid_value = header.invalid_value;
+      m_params.mapping = header.mapping;
 
       // Now build a span over the remaining data
       std::size_t nelem { (nbytes - constants_offset) / sizeof(PixelCalibStruct) };
@@ -724,10 +725,7 @@ namespace xalgospp::det {
         "      else if (g_bits == 1) g_idx = 1;\n"
         "      else if (g_bits == 2 || g_bits == 3) g_idx = 2;\n"
         "    }\n"
-        "    int local_idx = b_idx % npix;\n"
-        "    int seg_idx = b_idx / npix;\n"
-        "    int seg_offset = seg_idx * npix;\n"
-        "    float2 c = calib_const[g_idx * npix + seg_offset + local_idx];\n"
+        "    float2 c = calib_const[g_idx * npix + b_idx];\n"
         "    reinterpret_cast<float*>(dest_data)[b_idx] = (static_cast<float>(data_val) - c.x) * c.y;\n"
         "  }\n"
         "}\n";
