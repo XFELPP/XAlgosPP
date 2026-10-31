@@ -137,7 +137,7 @@ namespace xalgospp::scheduling {
     using StepIdxType = typename DataSource::DataFormat::StepIdxType;
 
     ReadImageTask(DataSource& ds,
-                  DataFetcher& fetcher,
+                  DataFetcher fetcher,
                   StepIdxType idx)
       : m_ds(ds)
       , m_fetcher(std::move(fetcher))
@@ -160,6 +160,11 @@ namespace xalgospp::scheduling {
         /* custom_slots     = */ 0
       };
       set_resources(reqs);
+
+      // The fetched view points into the fetching thread's sbio buffers
+      // which that thread's next fetch overwrites
+      // Setting this says consumers must run right after, here.
+      set_thread_affine_output(true);
     }
 
     const void* const* get_output_ptr_address() const { return &m_output_ptr; }
@@ -222,10 +227,12 @@ namespace xalgospp::scheduling {
     template <typename TaskBuilder>
     IOGeneratorTask(DagScheduler& scheduler,
                     DataSource& ds,
-                    TaskBuilder&& downstream_builder)
+                    TaskBuilder&& downstream_builder,
+                    std::size_t steps_per_claim = 1)
       : m_scheduler(scheduler)
       , m_ds(ds)
       , m_builder(std::forward<TaskBuilder>(downstream_builder))
+      , m_steps_per_claim(steps_per_claim > 0 ? steps_per_claim : 1)
     {
       // For IO, we want to schedule the Task to run on any CPU.
       // Once the data has been fetched, then down-stream Tasks must use the
@@ -246,31 +253,54 @@ namespace xalgospp::scheduling {
       set_resources(reqs);
     }
 
+    /**
+     * Run this IO generation until the provided DataSource is exhausted.
+     *
+     * The system uses a logical concept of "lanes" where a lane is tied to a single
+     * iterator within (or "parallel unit" in sbio terminology). Fetched data steps
+     * are pulled and remain on the thread - this prevents migration of data. The
+     * data is fetched, read, then the children process it, before the thread can
+     * be used to fetch a new step's worth of data.
+     *
+     * @note The model requires submitting one `IOGeneratorTask` for each "lane", i.e.,
+     *       for each of the participant in a `sbio` data iteration loop.
+     */
     void execute() override {
-      auto idx { m_ds.next() };
-
-      if (idx == DataFormat::ExhaustedSentinel) {
-        return;
+      if constexpr (requires { m_ds.steps(); }) {
+        // The range ends this lane's part of the iteration on exit, early or not
+        for (auto idx : m_ds.steps()) {
+          if (!run_step(idx)) {
+            break;
+          }
+        }
+      } else {
+        for (auto idx { m_ds.next() }; idx != DataFormat::ExhaustedSentinel; idx = m_ds.next()) {
+          if (!run_step(idx)) {
+            break;
+          }
+        }
       }
-
-      auto downstream_tasks { m_builder(idx) };
-
-      m_scheduler.submit_dag(downstream_tasks);
-
-      auto next_gen = std::make_shared<IOGeneratorTask>(m_scheduler, m_ds, m_builder);
-      next_gen->add_dependency(shared_from_this());
-
-      m_scheduler.submit_dag({ next_gen });
     }
 
     bool is_generator() const override { return true; }
 
   private:
+    /**
+     * Check if the IO generation is stopping.
+     *
+     * @returns false if the lane should stop (the scheduler is shutting down).
+     */
+    bool run_step(StepIdxType idx) {
+      m_scheduler.submit_dag_inline(m_builder(idx));
+
+      return m_scheduler.throttle_generator();
+    }
+
     DagScheduler& m_scheduler;
     DataSource& m_ds;
     std::function<std::vector<std::shared_ptr<Task>>(StepIdxType)> m_builder;
+    std::size_t m_steps_per_claim { 1 };
   };
-
 } // namespace xalgospp::scheduling
 
 #endif // XALGOSPP_SCHEDULING_TASKS_IO_HH

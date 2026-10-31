@@ -37,6 +37,7 @@
 #include <sstream>
 #include <string>
 #include <thread>
+#include <type_traits>
 #include <vector>
 
 #ifdef __linux__
@@ -294,7 +295,6 @@ namespace xalgospp::scheduling {
   }
 
   bool DagScheduler::should_throttle_generators() {
-    std::size_t total_workers { m_workers.size() };
     std::size_t unfinished { m_unfinished_tasks.load(std::memory_order_acquire) };
 
     return unfinished >= m_num_workers * m_max_concurrency_multiplier.load(std::memory_order_relaxed);
@@ -496,6 +496,27 @@ namespace xalgospp::scheduling {
     }
   }
 
+  void DagScheduler::submit_dag_inline(std::vector<std::shared_ptr<Task>> tasks) {
+    m_unfinished_tasks.fetch_add(tasks.size(), std::memory_order_release);
+
+    // Check parents/roots before the enqueueing
+    // During the loop, they could run. If the children are released, they
+    // may end up getting queued a second (incorrect) time to run.
+    std::vector<std::shared_ptr<Task>> roots;
+    roots.reserve(tasks.size());
+    for (auto& task : tasks) {
+      if (task->m_pending_parents.load(std::memory_order_acquire) == 0) {
+        roots.push_back(std::move(task));
+      }
+    }
+
+    // Run direclty in thread
+    for (auto& task : roots) {
+      bool has_token { is_high_mem(*task) && acquire_hm_token_blocking() };
+      run_task(std::move(task), has_token);
+    }
+  }
+
   bool DagScheduler::throttle_generator() {
     if (m_config.enable_dynamic_backpressure) {
       while (m_running.load(std::memory_order_relaxed) && should_throttle_generators()) {
@@ -504,7 +525,7 @@ namespace xalgospp::scheduling {
         if (task) {
           run_task(std::move(task), has_token);
         } else {
-          std::this_thread_sleep_for(std::chrono::microseconds(50));
+          std::this_thread::sleep_for(std::chrono::microseconds(50));
         }
       }
     }
@@ -565,6 +586,19 @@ namespace xalgospp::scheduling {
 
     // Fallback on arbitrary threshold of 8 for mem-bound throttling
     return task.resources().memory_intensity >= 8;
+  }
+
+  bool DagScheduler::try_acquire_hm_token() {
+    std::size_t current { m_active_high_mem_tasks.load(std::memory_order_seq_cst) };
+    while (current < m_max_concurrent_high_mem.load(std::memory_order_relaxed)) {
+      if (m_active_high_mem_tasks.compare_exchange_weak(current,
+                                                        current + 1,
+                                                        std::memory_order_seq_cst)) {
+        return true;
+      }
+    }
+
+    return false;
   }
 
   bool DagScheduler::acquire_hm_token_blocking() {
@@ -630,11 +664,25 @@ namespace xalgospp::scheduling {
     }
   }
 
-  void DagScheduler::on_task_complete(std::shared_ptr<Task> completed_task) {
+  void DagScheduler::on_task_complete(std::shared_ptr<Task> completed_task,
+                                      std::vector<std::shared_ptr<Task>>& run_here,
+                                      std::shared_ptr<Task>& continuation) {
+    const bool affine { completed_task->thread_affine_output() };
+
     for (auto& child : completed_task->m_children) {
       // Decrement the child's counter. If it reaches 0, all dependencies are done.
-      if (child->m_pending_parents.fetch_sub(1, std::memory_order_acq_rel) == 1) {
-        enqueue(child);
+      if (child->m_pending_parents.fetch_sub(1, std::memory_order_acq_rel) != 1) {
+        continue;
+      }
+
+      if (affine) {
+        // The input is on this thread and must stay here
+        run_here.push_back(std::move(child));
+      } else if (!continuation && !child->is_generator()) {
+        // Keep the child in the same thread, its in the cache
+        continuation = std::move(child);
+      } else {
+        enqueue(std::move(child));
       }
     }
 
@@ -683,8 +731,125 @@ namespace xalgospp::scheduling {
     }
   }
 
+  std::pair<std::shared_ptr<Task>, bool> DagScheduler::find_task(numa_node_t home_node,
+                                                                 bool allow_generators) {
+    // Memory-bound work deferred for a token goes first, once a token is free
+    if (!m_hm_deferred.empty() && try_acquire_hm_token()) {
+      if (auto task { m_hm_deferred.pop() }) {
+        return { std::move(task), true };
+      }
+      release_hm_token();
+    }
+
+    const std::size_t num_numa_nodes { m_node_queues.size() };
+    const numa_node_t home { home_node == ANY_NODE ? 0 : home_node };
+
+    // General search is as follows:
+    // - Check the local queue first
+    // - If no work locally, check the global queue
+    // - If still no work, fall back to stealing work from remote nodes
+    // - Finally, if a task has been found, check concurrency/throttling limits
+    while (true) {
+      std::shared_ptr<Task> task { m_node_queues[home]->pop() };
+
+      if (!task) {
+        task = m_global_queue.pop();
+      }
+
+      for (std::size_t i = 1; !task && i < num_numa_nodes; ++i) {
+        numa_node_t remote_node { static_cast<int>((home + i) % num_numa_nodes) };
+        task = m_node_queues[remote_node]->steal();
+      }
+
+      if (!task) {
+        return { nullptr, false };
+      }
+
+      if (!allow_generators && task->is_generator()) {
+        m_global_queue.push(std::move(task));
+        notify_worker();
+        return { nullptr, false };
+      }
+
+      if (!is_high_mem(*task)) {
+        return { std::move(task), false };
+      }
+
+      if (try_acquire_hm_token()) {
+        return { std::move(task), true };
+      }
+
+      // Otherwise, throtlled - wait until getting more work
+      m_hm_deferred.push(std::move(task));
+    }
+  }
+
+  void DagScheduler::execute_task(const std::shared_ptr<Task>& task) {
+    // Execute task (include timing)
+    auto start_time { std::chrono::high_resolution_clock::now() };
+    try {
+      // m_logger->trace("Worker {} executing task.", home_node);
+      task->execute();
+    } catch (const std::exception& e) {
+      m_logger->error("[Worker Thread {}] Task failed with exception: {}",
+                      t_worker_id,
+                      e.what());
+    } catch (...) {
+      m_logger->error("[Worker Thread {}] Task failed with unknown exception!",
+                      t_worker_id);
+    }
+    auto end_time { std::chrono::high_resolution_clock::now() };
+    auto elapsed_ns {
+      std::chrono::duration_cast<std::chrono::nanoseconds>(end_time - start_time).count()
+    };
+
+    if (m_profiling_phase.load(std::memory_order_relaxed)) {
+      record_task_metrics(task, elapsed_ns);
+    }
+  }
+
+  void DagScheduler::run_task(std::shared_ptr<Task> task, bool has_token) {
+    std::vector<std::shared_ptr<Task>> run_here;
+
+    while (task) {
+      execute_task(task);
+
+      std::shared_ptr<Task> continuation;
+      on_task_complete(std::move(task), run_here, continuation);
+
+      bool must_run_here { false };
+
+      if (!run_here.empty()) {
+        if (continuation) {
+          enqueue(std::move(continuation));
+        }
+        task = std::move(run_here.back());
+        run_here.pop_back();
+        must_run_here = true;
+      } else {
+        task = std::move(continuation);
+      }
+
+      const bool needs_token { task && is_high_mem(*task) };
+      if (has_token && !needs_token) {
+        release_hm_token();
+        has_token = false;
+      } else if (!has_token && needs_token) {
+        if (must_run_here) {
+          has_token = acquire_hm_token_blocking();
+        } else {
+          has_token = try_acquire_hm_token();
+          if (!has_token) {
+            enqueue(std::move(task)); // Throttled
+          }
+        }
+      }
+    }
+  }
+
   void DagScheduler::worker_loop(std::size_t thread_id, numa_node_t home_node) {
-    g_current_numa_node = home_node; // Set the thread's current NUMA Node globally
+    g_current_numa_node = home_node; // Set the thread's current NUMA node globally
+    t_worker_id = thread_id;
 
     if (m_config.enable_pinning) {
       auto it { m_topology.find(home_node) };
@@ -698,144 +863,38 @@ namespace xalgospp::scheduling {
       }
     }
 
-    std::size_t num_numa_nodes { m_node_queues.size() };
-
-    // General work loop is as follows:
-    // - Check the local queue first
-    // - If no work locally, check the global queue
-    // - If still no work, fall back to stealing work from remote nodes
-    // - Finally, if a task has been found, check concurrency/throttling limits
-    //   If its okay to run, execute.
     while (m_running) {
-      std::shared_ptr<Task> task { nullptr };
-
-      task = m_node_queues[home_node]->pop();
-
-      if (!task) {
-        task = m_global_queue.pop();
-      }
-
-      if (!task) {
-        for (std::size_t i = 1; i < num_numa_nodes; ++i) {
-          numa_node_t remote_node { static_cast<int>((home_node + i) % num_numa_nodes) };
-          task = m_node_queues[remote_node]->steal();
-
-          // m_logger->trace("Worker from Node {} stealing work from {}.",
-          //                 home_node,
-          //                 remote_node);
-          if (task) {
-            break;
-          }
-        }
-      }
+      auto [task, has_token] = find_task(home_node, true);
 
       if (task) {
-
-        bool is_high_mem { false };
-        bool acquired_token { false };
-
-        if (!m_profiling_phase && m_config.raw_frame_size_bytes > 0) {
-          double task_mem_gb =
-            static_cast<double>(m_config.raw_frame_size_bytes * (1 + task->resources().memory_intensity)) / 1e9;
-          double avg_time_s { 0.010 }; // Hard-coded fallback
-
-          std::size_t count { m_compute_profile.count.load(std::memory_order_relaxed) };
-          if (count > 0) {
-            avg_time_s =
-              static_cast<double>(m_compute_profile.total_execution_time_ns.load(std::memory_order_relaxed)) / (count * 1e9);
-          }
-          double task_bandwidth { task_mem_gb / avg_time_s };
-
-          is_high_mem = (task_bandwidth > m_config.node_memory_bandwidth_limit_gbps * m_config.percent_bandwidth_is_high_mem);
-        } else {
-          // Fallback by setting an arbitrary threshold of 8 for mem-bound throttling.
-          is_high_mem = (task->resources().memory_intensity >= 8);
-        }
-
-        // Currently, set an arbitrary threshold of 8 for mem-bound throttling.
-        // bool is_high_mem { task->resources().memory_intensity >= 8 };
-        // bool acquired_token { false };
-
-        if (is_high_mem) {
-          std::size_t current_high_mem { m_active_high_mem_tasks.load(std::memory_order_acquire) };
-          if (current_high_mem < m_config.max_concurrent_high_mem) {
-            // Try to increment the count
-            if (m_active_high_mem_tasks.fetch_add(1, std::memory_order_relaxed) < m_config.max_concurrent_high_mem) {
-              acquired_token = true;
-            } else {
-              // Reverted because limit was hit
-              m_active_high_mem_tasks.fetch_sub(1, std::memory_order_relaxed);
-            }
-          }
-
-          // If throttled, sleep, or see if another queue can be used.
-          if (!acquired_token) {
-            m_node_queues[home_node]->push(std::move(task));
-
-            // m_logger->trace("Worker {} sleeping on HM cv.", home_node);
-            auto wait_hm_concurrent = [this]() {
-              return
-                !m_running ||
-                m_active_high_mem_tasks.load(std::memory_order_acquire) < m_config.max_concurrent_high_mem;
-            };
-            // Sleep on a CV to avoid constant lock contention during high-mem throttling
-            std::unique_lock<std::mutex> lock(m_hm_mutex);
-            m_hm_cv.wait(lock, wait_hm_concurrent);
-            continue;
-          }
-        }
-
-        // Execute task (include timing)
-        auto start_time { std::chrono::high_resolution_clock::now() };
-        try {
-          // m_logger->trace("Worker {} executing task.", home_node);
-          task->execute();
-        } catch (const std::exception& e) {
-          m_logger->error("[Worker Thread {}] Task failed with exception: {}",
-                          thread_id,
-                          e.what());
-        } catch (...) {
-          m_logger->error("[Worker Thread {}] Task failed with unknown exception!",
-                          thread_id);
-        }
-        auto end_time { std::chrono::high_resolution_clock::now() };
-        auto elapsed_ns {
-          std::chrono::duration_cast<std::chrono::nanoseconds>(end_time - start_time).count()
-        };
-
-        if (m_profiling_phase) {
-          record_task_metrics(task, elapsed_ns);
-        }
-
-        if (acquired_token) {
-          m_active_high_mem_tasks.fetch_sub(1, std::memory_order_release);
-          {
-            std::lock_guard<std::mutex> lock(m_hm_mutex);
-            m_hm_cv.notify_all();
-          }
-        }
-
-        on_task_complete(std::move(task));
-      } else {
-        std::unique_lock<std::mutex> lock(m_cv_mutex);
-
-        auto wait_for_work = [this]() {
-          if (!m_running) {
-            return true;
-          }
-          if (!m_global_queue.empty()) {
-            return true;
-          }
-          for (auto& q : m_node_queues) {
-            if (!q->empty()) {
-              return true;
-            }
-          }
-          return false;
-        };
-
-        m_job_cv.wait_for(lock, std::chrono::milliseconds(100), wait_for_work);
+        run_task(std::move(task), has_token);
+        continue;
       }
+
+      std::unique_lock<std::mutex> lock(m_cv_mutex);
+
+      auto wait_for_work = [this]() {
+        if (!m_running) {
+          return true;
+        }
+        if (!m_global_queue.empty()) {
+          return true;
+        }
+        for (auto& q : m_node_queues) {
+          if (!q->empty()) {
+            return true;
+          }
+        }
+        if (!m_hm_deferred.empty() &&
+            m_active_high_mem_tasks.load() < m_max_concurrent_high_mem.load()) {
+          return true;
+        }
+        return false;
+      };
+
+      m_num_sleeping.fetch_add(1, std::memory_order_seq_cst);
+      m_job_cv.wait_for(lock, std::chrono::milliseconds(100), wait_for_work);
+      m_num_sleeping.fetch_sub(1, std::memory_order_relaxed);
     }
 
     m_logger->debug("[Thread {}][Posix Thread ID: {}][NUMA Node {}] Exiting worker loop. Unfinished tasks = {}, "
