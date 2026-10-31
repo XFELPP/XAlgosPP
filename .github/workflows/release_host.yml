@@ -66,7 +66,7 @@ jobs:
         shell: pwsh
         run: |
           python -m pip install meson ninja
-          python -m pip install "ncarray==0.7.6+host" --extra-index-url https://pypi.xfelpp.org/host/
+          python -m pip install "ncarray==0.7.8+host" --extra-index-url https://pypi.xfelpp.org/host/
           $env:PKG_CONFIG_PATH = "$(nca-pkg-config --pkg-config-path):$env:PKG_CONFIG_PATH"
 
           python -m pip install "sbio==0.1.4+host" --extra-index-url https://pypi.xfelpp.org/host/
@@ -87,7 +87,7 @@ jobs:
           export PYTHONPATH="$HOME/Library/Python/3.10/lib/python/site-packages:/opt/homebrew/lib/python3.10/site-packages:$PYTHONPATH"
           export PYTHON="/opt/homebrew/opt/python@3.10/bin/python3.10"
           ccache -z
-          python3.10 -m pip install --break-system-packages meson ninja "ncarray==0.7.6+host" "sbio==0.1.4+host" --extra-index-url https://pypi.xfelpp.org/host/ || true
+          python3.10 -m pip install --break-system-packages meson ninja "ncarray==0.7.8+host" "sbio==0.1.4+host" --extra-index-url https://pypi.xfelpp.org/host/ || true
           export PKG_CONFIG_PATH="$(nca-pkg-config --pkg-config-path):${PKG_CONFIG_PATH}"
           export PKG_CONFIG_PATH="$(sbio-pkg-config --pkg-config-path):${PKG_CONFIG_PATH}"
           meson setup builddir -Dbuild_core=true -Dbuild_python=false -Dxalg_as_wheel=false -Dbuild_mpi=mpich -Dbuildtype=release --prefix=$(pwd)/install
@@ -109,7 +109,7 @@ jobs:
               apk add --no-cache autoconf automake libtool m4 perl make gcc g++ linux-headers musl-dev bash
           fi
           /opt/python/cp310-cp310/bin/pip install meson ninja
-          /opt/python/cp310-cp310/bin/python -m pip install "ncarray==0.7.6+host" --extra-index-url https://pypi.xfelpp.org/host/
+          /opt/python/cp310-cp310/bin/python -m pip install "ncarray==0.7.8+host" --extra-index-url https://pypi.xfelpp.org/host/
           /opt/python/cp310-cp310/bin/python -m pip install "sbio==0.1.4+host" --extra-index-url https://pypi.xfelpp.org/host/
           export PKG_CONFIG_PATH="$(nca-pkg-config --pkg-config-path):${PKG_CONFIG_PATH}"
           export PKG_CONFIG_PATH="$(sbio-pkg-config --pkg-config-path):${PKG_CONFIG_PATH}"

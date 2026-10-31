@@ -26,7 +26,7 @@ config-settings = { "setup-args" = ["-Dbuild_core=false", "-Dbuildtype=release"]
 before-build = [
     "python -m pip install -U pip",
     "python -m pip install \"meson>=1.10.1\" meson-python ninja \"pybind11[global]\" setuptools cmake delvewheel",
-    "python -m pip install --break-system-packages \"ncarray==0.7.6+host\" --extra-index-url https://pypi.xfelpp.org/host/",
+    "python -m pip install --break-system-packages \"ncarray==0.7.8+host\" --extra-index-url https://pypi.xfelpp.org/host/",
     "python -m pip install --break-system-packages \"sbio==0.1.4+host\" --extra-index-url https://pypi.xfelpp.org/host/",
 ]
 
@@ -48,7 +48,7 @@ brew install autoconf automake libtool ccache ninja meson cmake python@3.10
 export PATH="$HOME/Library/Python/3.10/bin:/opt/homebrew/opt/python@3.10/bin:$PATH"
 export PYTHONPATH="$HOME/Library/Python/3.10/lib/python/site-packages:/opt/homebrew/lib/python3.10/site-packages:$PYTHONPATH"
 export PYTHON="/opt/homebrew/opt/python@3.10/bin/python3.10"
-python3.10 -m pip install --break-system-packages meson ninja "ncarray==0.7.6+host" "sbio==0.1.4+host" --extra-index-url https://pypi.xfelpp.org/host/ || true
+python3.10 -m pip install --break-system-packages meson ninja "ncarray==0.7.8+host" "sbio==0.1.4+host" --extra-index-url https://pypi.xfelpp.org/host/ || true
 """
 before-build = [
     "python -m pip install -U pip",
@@ -56,7 +56,7 @@ before-build = [
     # This monstrosity is because Python3.8 runs under rosetta and the ARM64/Intel mismatch
     # Despite cibuildwheel creating a macosx_11_0_arm64 wheel for ncarray. It cannot
     # download it with pip.
-    "python -m pip install --break-system-packages \"ncarray==0.7.6+host\" --extra-index-url https://pypi.xfelpp.org/host/ --platform macosx_11_0_arm64 --only-binary :all: --target \"$(python -c 'import site; print(site.getsitepackages()[0])')\"",
+    "python -m pip install --break-system-packages \"ncarray==0.7.8+host\" --extra-index-url https://pypi.xfelpp.org/host/ --platform macosx_11_0_arm64 --only-binary :all: --target \"$(python -c 'import site; print(site.getsitepackages()[0])')\"",
     "python -m pip install --break-system-packages \"sbio==0.1.4+host\" --extra-index-url https://pypi.xfelpp.org/host/ --platform macosx_11_0_arm64 --only-binary :all: --target \"$(python -c 'import site; print(site.getsitepackages()[0])')\"",
 ]
 repair-wheel-command = "python utilities/repair_wheel.py {wheel} {dest_dir} --require-archs {delocate_archs} --no-exclude-core"
@@ -84,7 +84,7 @@ config-settings = { "setup-args" = ["-Dcpp_compiler_launcher=", "-Dcuda_compiler
 before-build = [
     "python -m pip install -U pip",
     "python -m pip install \"meson>=1.10.1\" meson-python ninja \"pybind11[global]\" setuptools cmake delvewheel",
-    "python -m pip install --break-system-packages \"ncarray==0.7.6+host\" --extra-index-url https://pypi.xfelpp.org/host/",
+    "python -m pip install --break-system-packages \"ncarray==0.7.8+host\" --extra-index-url https://pypi.xfelpp.org/host/",
     "python -m pip install --break-system-packages \"sbio==0.1.4+host\" --extra-index-url https://pypi.xfelpp.org/host/",
 ]
 repair-wheel-command = "python utilities/repair_wheel_win.py {dest_dir} {wheel} --no-exclude-core"
