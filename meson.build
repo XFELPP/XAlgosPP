@@ -587,7 +587,7 @@ print(";".join(libs).replace("\r", ""))
 endif
 deps_for_xalgospp += sbio_dep
 
-if host_machine.system() == 'darwin'
+if host_machine.system() != 'windows'
     # macOS CI is the worst. Fails in all psosible configurations
     # BUILD ONLY WITH SUBPROJECT, STATIC ONLY, DONT ALLOW ANYTHING TO BE PULLED BY HOMEBREW
     fmt_proj = subproject('fmt', default_options: ['default_library=static'])
