@@ -21,7 +21,221 @@
 
 #include "xalgospp/features/impl/pf8.hh" // Has Peak struct
 
+#include <utility>
+#include <vector>
+
 namespace xalgospp::features::impl {
+  DevImageData::DevImageData(int npixels)
+    : num_pixels(npixels)
+  {
+    cudaMalloc(reinterpret_cast<void**>(&mask), npixels * sizeof(bool));
+    cudaMalloc(reinterpret_cast<void**>(&r_map), npixels * sizeof(float));
+  }
+
+  DevImageData::~DevImageData() {
+    if (mask) {
+      cudaFree(mask);
+      mask = nullptr;
+    }
+
+    if (r_map) {
+      cudaFree(r_map);
+      r_map = nullptr;
+    }
+  }
+
+  void DevImageData::swap(DevImageData& other) noexcept {
+    std::swap(mask, other.mask);
+    std::swap(r_map, other.r_map);
+    std::swap(num_pixels, other.num_pixels);
+  }
+
+  DevImageData::DevImageData(DevImageData&& other) noexcept { swap(other); }
+  DevImageData& DevImageData::operator=(DevImageData&& other) noexcept {
+    if (this != &other) {
+      swap(other);
+    }
+
+    return *this;
+  }
+
+  DevRadialStatistics::DevRadialStatistics(int nbins)
+    : num_bins(nbins)
+  {
+    std::size_t bins_bytes { static_cast<std::size_t>(nbins * sizeof(float)) };
+    std::size_t count_bytes { static_cast<std::size_t>(nbins * sizeof(int)) };
+
+    cudaMalloc(reinterpret_cast<void**>(&offset), bins_bytes);
+    cudaMalloc(reinterpret_cast<void**>(&sigma), bins_bytes);
+    cudaMalloc(reinterpret_cast<void**>(&count), count_bytes);
+
+    cudaMalloc(reinterpret_cast<void**>(&r_threshold), bins_bytes);
+    cudaMalloc(reinterpret_cast<void**>(&l_threshold), bins_bytes);
+
+    cudaMalloc(reinterpret_cast<void**>(&sum), bins_bytes);
+    cudaMalloc(reinterpret_cast<void**>(&sum_sq), bins_bytes);
+
+    cudaMemset(sum, 0, bins_bytes);
+    cudaMemset(sum_sq, 0, bins_bytes);
+    cudaMemset(count, 0, count_bytes);
+
+    std::vector<float> init_r(nbins, 1e9f);
+    std::vector<float> init_l(nbins, -1e9f);
+
+    cudaMemcpy(r_threshold, init_r.data(), bins_bytes, cudaMemcpyHostToDevice);
+    cudaMemcpy(l_threshold, init_l.data(), bins_bytes, cudaMemcpyHostToDevice);
+  }
+
+  DevRadialStatistics::~DevRadialStatistics() {
+    if (offset) {
+      cudaFree(offset);
+      offset = nullptr;
+    }
+
+    if (sigma) {
+      cudaFree(sigma);
+      sigma = nullptr;
+    }
+
+    if (count) {
+      cudaFree(count);
+      count = nullptr;
+    }
+
+    if (r_threshold) {
+      cudaFree(r_threshold);
+      r_threshold = nullptr;
+    }
+
+    if (l_threshold) {
+      cudaFree(l_threshold);
+      l_threshold = nullptr;
+    }
+
+    if (sum) {
+      cudaFree(sum);
+      sum = nullptr;
+    }
+
+    if (sum_sq) {
+      cudaFree(sum_sq);
+      sum_sq = nullptr;
+    }
+  }
+
+  void DevRadialStatistics::swap(DevRadialStatistics& other) noexcept {
+    std::swap(offset, other.offset);
+    std::swap(sigma, other.sigma);
+    std::swap(count, other.count);
+    std::swap(r_threshold, other.r_threshold);
+    std::swap(l_threshold, other.l_threshold);
+    std::swap(sum, other.sum);
+    std::swap(sum_sq, other.sum_sq);
+    std::swap(num_bins, other.num_bins);
+  }
+
+  DevRadialStatistics::DevRadialStatistics(DevRadialStatistics&& other) noexcept {
+    swap(other);
+  }
+  DevRadialStatistics& DevRadialStatistics::operator=(DevRadialStatistics&& other) noexcept {
+    if (this != &other) {
+      swap(other);
+    }
+
+    return *this;
+  }
+
+  DevPeakLabelData::DevPeakLabelData(int npixels)
+    : num_pixels(npixels)
+  {
+    std::size_t pix_bytes { static_cast<std::size_t>(npixels * sizeof(float)) };
+    std::size_t pix_int_bytes { static_cast<std::size_t>(npixels * sizeof(int)) };
+
+    cudaMalloc(reinterpret_cast<void**>(&labels_v1), pix_int_bytes);
+    cudaMalloc(reinterpret_cast<void**>(&labels_v2), pix_int_bytes);
+
+    cudaMalloc(reinterpret_cast<void**>(&changed), sizeof(bool));
+
+    cudaMalloc(reinterpret_cast<void**>(&label_sum_i), pix_bytes);
+    cudaMalloc(reinterpret_cast<void**>(&label_sum_fs), pix_bytes);
+    cudaMalloc(reinterpret_cast<void**>(&label_sum_ss), pix_bytes);
+    cudaMalloc(reinterpret_cast<void**>(&label_max_i), pix_bytes);
+    cudaMalloc(reinterpret_cast<void**>(&label_npix), pix_int_bytes);
+
+    cudaMalloc(reinterpret_cast<void**>(&peak_count), sizeof(int));
+  }
+
+  DevPeakLabelData::~DevPeakLabelData() {
+    if (labels_v1) {
+      cudaFree(labels_v1);
+      labels_v1 = nullptr;
+    }
+
+    if (labels_v2) {
+      cudaFree(labels_v2);
+      labels_v2 = nullptr;
+    }
+
+    if (changed) {
+      cudaFree(changed);
+      changed = nullptr;
+    }
+
+    if (label_sum_i) {
+      cudaFree(label_sum_i);
+      label_sum_i = nullptr;
+    }
+
+    if (label_sum_fs) {
+      cudaFree(label_sum_fs);
+      label_sum_fs = nullptr;
+    }
+
+    if (label_sum_ss) {
+      cudaFree(label_sum_ss);
+      label_sum_ss = nullptr;
+    }
+
+    if (label_max_i) {
+      cudaFree(label_max_i);
+      label_max_i = nullptr;
+    }
+
+    if (label_npix) {
+      cudaFree(label_npix);
+      label_npix = nullptr;
+    }
+
+    if (peak_count) {
+      cudaFree(peak_count);
+      peak_count = nullptr;
+    }
+  }
+
+  void DevPeakLabelData::swap(DevPeakLabelData& other) noexcept {
+    std::swap(labels_v1, other.labels_v1);
+    std::swap(labels_v2, other.labels_v2);
+    std::swap(changed, other.changed);
+    std::swap(label_sum_i, other.label_sum_i);
+    std::swap(label_sum_fs, other.label_sum_fs);
+    std::swap(label_sum_ss, other.label_sum_ss);
+    std::swap(label_max_i, other.label_max_i);
+    std::swap(label_npix, other.label_npix);
+    std::swap(peak_count, other.peak_count);
+    std::swap(num_pixels, other.num_pixels);
+  }
+
+  DevPeakLabelData::DevPeakLabelData(DevPeakLabelData&& other) noexcept {
+    swap(other);
+  }
+  DevPeakLabelData& DevPeakLabelData::operator=(DevPeakLabelData&& other) noexcept {
+    if (this != &other) {
+      swap(other);
+    }
+
+    return *this;
+  }
+
   __global__ void k_radial_stats_accumulate(const float* __restrict__ data,
                                             const bool* __restrict__ mask,
                                             const float* __restrict__ r_map,
@@ -56,21 +270,29 @@ namespace xalgospp::features::impl {
                                           float* r_sigma,
                                           float* r_threshold,
                                           float* l_threshold,
-                                          const float* r_sum,
-                                          const float* r_sum_sq,
-                                          const int* r_count,
+                                          float* r_sum,
+                                          float* r_sum_sq,
+                                          int* r_count,
                                           int num_bins,
                                           float min_snr,
                                           float adc_threshold) {
-    int bin { blockIdx.x * blockDim.x + threadIdx.x };
-    if (bin >= num_bins) {
+    unsigned bin { blockIdx.x * blockDim.x + threadIdx.x };
+    if (static_cast<int>(bin) >= num_bins) {
       return;
     }
 
     int count { r_count[bin] };
+    float sum { r_sum[bin] };
+    float sum_sq { r_sum_sq[bin] };
+
+    // Reset for next iteration
+    r_count[bin] = 0;
+    r_sum[bin] = 0.0f;
+    r_sum_sq[bin] = 0.0f;
+
     if (count > 0) {
-      float mean { r_sum[bin] / count };
-      float sigma2 { (r_sum_sq[bin] / count) - (mean * mean) };
+      float mean { sum / count };
+      float sigma2 { (sum_sq / count) - (mean * mean) };
       float sigma { (sigma2 > 0.0f) ? sqrtf(sigma2) : 0.01f };
 
       r_offset[bin] = mean;
@@ -91,10 +313,25 @@ namespace xalgospp::features::impl {
                                 const float* __restrict__ r_map,
                                 int* labels,
                                 int num_pixels,
-                                int num_bins) {
+                                int num_bins,
+                                float* label_sum_i,
+                                float* label_sum_fs,
+                                float* label_sum_ss,
+                                float* label_max_i,
+                                int* label_npix,
+                                int* peak_count) {
     unsigned idx { blockIdx.x * blockDim.x + threadIdx.x };
     if (idx >= num_pixels) {
       return;
+    }
+
+    label_sum_i[idx] = 0.0f;
+    label_sum_fs[idx] = 0.0f;
+    label_sum_ss[idx] = 0.0f;
+    label_max_i[idx] = 0.0f;
+    label_npix[idx] = 0;
+    if (idx == 0) {
+      *peak_count = 0;
     }
 
     int bin { static_cast<int>(roundf(r_map[idx])) };
@@ -274,7 +511,7 @@ namespace xalgospp::features::impl {
           peak_max_i,
           snr,
           npix,
-          label
+          static_cast<int>(label)
         };
       }
     }

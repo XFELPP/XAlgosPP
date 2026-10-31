@@ -3,8 +3,10 @@
 #include "xalgospp/scheduling/staging.hh"
 #include "xalgospp/scheduling/tasks/analysis.hh"
 #include "xalgospp/scheduling/tasks/io.hh"
+#include "xalgospp/scheduling/timing.hh"
 
 #include <sbio/core/datasource.hh>
+#include <sbio/formats/xtc2/xtc2_locator.hh>
 #include <sbio/formats/xtc2/xtc2_traits.hh>
 #include <sbio/execution/mpi.hh>
 #include <sbio/execution/mpi_threaded.hh>
@@ -30,7 +32,7 @@ void usage(char* progname) {
   std::cerr << "Usage: " << progname
     // --- Scheduler settings --- //
             << " [-a <autotune>] [-b <back pressure>] [-m <max_hm>] [-s <shmem_type>]"
-            << " [-t <threads>]"
+            << " [-t <threads>] [-l <lanes>]"
     // --- Fake Data or Real Data --- //
             << " [[-d <det_name>] -e <experiment> -r <run_num> [-o <off_per_read>]]"
             << " [-f [-n <niter>]]"
@@ -47,7 +49,10 @@ Args:
   -d <det_name>      Detector name. Default: `jungfrau`
   -e <experiment>    Experiment to load data from.
   -f                 Use fake generated data.
+  -g <batch size>    Size of contiguous batch to request. Steps still handed out
+                     1 at a time. Default: 1.
   -h                 Display help and exit.
+  -l <lanes>         Number of IO lanes (concurrent generaotrs). 0 = one per worker. Default: 0.
   -m <max_hm>        Max concurrent high-memory-bandwidth tasks. Default: 2.
   -n <niter>         Number of iterations for timing. Default: 100.
   -o <off_read>      Offsets to fetch per .smd.xtc2 read. Default: 40000.
@@ -61,6 +66,7 @@ Args:
                        - 4 = Per L2 Cache
                      Default: 0 --> 1 copy of constants per node/machine.
   -t <threads>       Threads per node. Default: 0.
+  -x <MiB>           Max buffer size in MiB. Default: 16 MiB.
 )a" << std::endl;
 }
 
@@ -75,18 +81,23 @@ int main(int argc, char* argv[]) {
   unsigned events_per_read { 40000 };
   unsigned run_num { 0 };
   std::size_t threads_per_node { 0 };
+  std::size_t num_lanes { 0 };
   unsigned n_iter { 100 };
   bool autotune { true };
   bool backpressure { true };
 
+  std::size_t batch_size { 1 };
+
   unsigned print_interval { 0 };
   bool use_fake_generator { false };
+
+  std::size_t max_buffer_size_mib { 16 };
 
   using xalgospp::scheduling::ShmemType;
 
   ShmemType shmem_type { ShmemType::MACHINE };
 
-  while ((c = getopt(argc, argv, "a:b:d:e:fhm:n:o:p:r:s:t:")) != -1) {
+  while ((c = getopt(argc, argv, "a:b:d:e:fg:hi:l:m:n:o:p:r:s:t:x:")) != -1) {
     switch (c) {
     case 'a': {
       autotune = static_cast<bool>(std::atoi(optarg));
@@ -108,9 +119,17 @@ int main(int argc, char* argv[]) {
       use_fake_generator = true;
       break;
     }
+    case 'g': {
+      batch_size = static_cast<std::size_t>(std::atoi(optarg));
+      break;
+    }
     case 'h': {
       usage(argv[0]);
       exit(0);
+    }
+    case 'l': {
+      num_lanes = static_cast<std::size_t>(std::atoi(optarg));
+      break;
     }
     case 'm': {
       max_concurrent_hm = static_cast<std::size_t>(std::atoi(optarg));
@@ -147,6 +166,10 @@ int main(int argc, char* argv[]) {
       threads_per_node = static_cast<std::size_t>(std::atoi(optarg));
       break;
     }
+    case 'x': {
+      max_buffer_size_mib = static_cast<std::size_t>(std::atoi(optarg));
+      break;
+    }
     default: {
       usage(argv[0]);
       exit(-1);
@@ -154,7 +177,6 @@ int main(int argc, char* argv[]) {
     }
   }
 
-  //MPI_Init(&argc, &argv);
   int provided;
   MPI_Init_thread(&argc, &argv, MPI_THREAD_MULTIPLE, &provided);
   if (provided < MPI_THREAD_MULTIPLE) {
@@ -184,12 +206,13 @@ int main(int argc, char* argv[]) {
   {
     // ---- Setup configuration for the IO DataSource ---- //
     MPIDataSource ds;
-    //SerialDataSource ds;
-    XTC2Traits::StreamParameters base_cfg;
-    base_cfg.events_per_read = events_per_read;
-    base_cfg.max_dgram_size = 0x4000000;
+    // SerialDataSource ds;
 
-    if (!ds.load_run(base_cfg, experiment, run_num)) {
+    sbio::GenericStreamConfig<sbio::XTC2Traits> base_cfg;
+    base_cfg.index_batch_size = events_per_read;
+    base_cfg.max_buffer_size = max_buffer_size_mib << 20;
+
+    if (!ds.load_source(base_cfg, experiment, run_num)) {
       std::cout << "[Main] Did not find any data streams for "
                 << experiment << " (run " << run_num << ")"
                 << std::endl;
@@ -211,26 +234,29 @@ int main(int argc, char* argv[]) {
         const_cast<const InvT&>(det.stream_brokers()[i]->metadata())
       };
 
-      for (std::size_t j = 0; j < inv.m_names_id_count; ++j) {
-        auto const& key { inv.m_names_id_table[j].key };
+      for (const auto& group : inv.groups()) {
+        const auto& grp_key { group.key };
 
-        if (std::strcmp(key.detname, det_name.c_str()) == 0) {
-          std::uint32_t nid { inv.m_names_id_table[j].names_id };
+        if (grp_key.group_name == det_name) {
+          segment_serial_nos[grp_key.segment] = grp_key["serial_number"];
 
-          segment_serial_nos[key.segment] = key.detId;
           if (detector_type.empty()) {
-            detector_type = key.dettype;
+            detector_type = grp_key.group_type;
           }
 
-          for (std::size_t k = 0; k < inv.m_field_count; ++k) {
-            if (inv.m_field_table[k].key.names_id == nid) {
+          std::uint32_t gid { group.group_id };
+          for (const auto& field : inv.fields()) {
+            if (field.key.group_id == gid) {
               std::string working_alg_name;
-              if constexpr (requires { key.algname; }) {
-                working_alg_name = key.algname;
+              std::string working_field_name;
+
+              if constexpr (inv.KeyCount == 2) {
+                working_alg_name = field.key.keys[0];
+                working_field_name = field.key.keys[1];
               } else {
                 working_alg_name = "raw";
+                working_field_name = field.key.keys[0];
               }
-              unique_metadata[working_alg_name].insert(inv.m_field_table[k].key.fieldname);
             }
           }
         }
@@ -276,7 +302,22 @@ int main(int argc, char* argv[]) {
         std::cout << "Processing step: " << idx << std::endl;
       }
 
-      return det.get_data(idx, "raw", "raw");
+      auto t0 { std::chrono::high_resolution_clock::now() };
+
+      using namespace sbio::literals;
+      auto arr = det.get_data(idx, "raw"_alg, "raw"_field);
+
+      auto t1 { std::chrono::high_resolution_clock::now() };
+
+      std::size_t slot { g_fetch_count.fetch_add(1, std::memory_order_relaxed) };
+      if (slot < MAX_TRACE_STEPS) {
+        g_fetch_log[slot] = {
+          static_cast<std::uint32_t>(idx),
+          static_cast<std::uint32_t>(std::chrono::duration_cast<std::chrono::microseconds>(t1 - t0).count())
+        };
+      }
+
+      return arr;
     };
 
     // ---- Setup configuration for the Calibration algorithm ---- //
@@ -324,14 +365,9 @@ int main(int argc, char* argv[]) {
         auto random_reader =
             std::make_shared<xalgospp::scheduling::RandomDeviceReader>("/dev/urandom");
 
-        auto circular_buffers = std::make_shared<std::vector<ncarray::SOArray>>();
-        for (int i = 0; i < 4; ++i) {
-          circular_buffers->emplace_back(ndim, shape, ncarray::DType::uint16);
-        }
-
-        //auto fake_fetcher = [random_reader, circular_buffers, total_bytes](std::size_t step_idx) {
         auto fake_fetcher = [&](std::size_t idx) {
-          auto& arr = (*circular_buffers)[idx % circular_buffers->size()];
+          thread_local ncarray::SOArray arr(ndim, shape, ncarray::DType::uint16);
+          (void)idx;
           random_reader->read_bytes(arr.data(), total_bytes);
 
           auto fake_view = arr.view();
@@ -358,11 +394,15 @@ int main(int argc, char* argv[]) {
         };
 
         auto start = std::chrono::high_resolution_clock::now();
-        auto init_gen =
-          std::make_shared<xalgospp::scheduling::IOGeneratorTask<decltype(fake_ds)>>(scheduler,
-                                                                                     fake_ds,
-                                                                                     builder);
-        scheduler.submit_dag({ init_gen });
+        const std::size_t lanes { num_lanes != 0 ? num_lanes : scheduler.num_workers() };
+        for (std::size_t lane = 0; lane < lanes; ++lane) {
+          scheduler.submit_dag({
+            std::make_shared<xalgospp::scheduling::IOGeneratorTask<decltype(fake_ds)>>(scheduler,
+                                                                                       fake_ds,
+                                                                                       builder,
+                                                                                       batch_size)
+          });
+        }
 
         scheduler.wait_all();
         auto end = std::chrono::high_resolution_clock::now();
@@ -380,8 +420,13 @@ int main(int argc, char* argv[]) {
       } else {
 
         auto builder = [&](typename XTC2Traits::StepIdxType idx) {
+          if (static_cast<std::size_t>(idx) >= n_iter) {
+            return std::vector<std::shared_ptr<xalgospp::scheduling::Task>> {};
+          }
+
           frame_count++;
 
+          auto t0 = std::chrono::high_resolution_clock::now();
           auto read_task { xalgospp::scheduling::make_read_image_task(ds, fetcher, idx) };
           using AlgTask = xalgospp::scheduling::AlgorithmTask<
             Calibrator,
@@ -396,11 +441,15 @@ int main(int argc, char* argv[]) {
         };
 
         auto start = std::chrono::high_resolution_clock::now();
-        auto init_gen =
-          std::make_shared<xalgospp::scheduling::IOGeneratorTask<decltype(ds)>>(scheduler,
-                                                                                ds,
-                                                                                builder);
-        scheduler.submit_dag({ init_gen });
+        const std::size_t lanes { num_lanes != 0 ? num_lanes : scheduler.num_workers() };
+        for (std::size_t lane = 0; lane < lanes; ++lane) {
+          scheduler.submit_dag({
+            std::make_shared<xalgospp::scheduling::IOGeneratorTask<decltype(ds)>>(scheduler,
+                                                                                  ds,
+                                                                                  builder,
+                                                                                  batch_size)
+          });
+        }
 
         scheduler.wait_all();
         auto end = std::chrono::high_resolution_clock::now();
@@ -415,6 +464,8 @@ int main(int argc, char* argv[]) {
                   << " - Processing took: " << total_time_s << " seconds." << std::endl
                   << " - Per event time was: " << per_evt_time_s << " seconds" << std::endl
                   << " - Per event rate was: " << per_evt_rate_hz << " events/s" << std::endl;
+
+        dump_trace_analysis();
       }
     }
   }

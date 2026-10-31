@@ -1,4 +1,5 @@
 import argparse
+import threading
 import time
 from typing import Callable, List, Optional
 
@@ -37,6 +38,13 @@ def main() -> None:
         help="Experiment name (e.g. mfx101210926)",
     )
     parser.add_argument(
+        "-i",
+        "--io-generators",
+        type=int,
+        default=0,
+        help="Number of IO generators per worker.",
+    )
+    parser.add_argument(
         "-m", "--max-hm", type=int, default=2, help="Max concurrent high-memory tasks"
     )
     parser.add_argument(
@@ -62,20 +70,20 @@ def main() -> None:
 
     comm = MPI.COMM_WORLD
     rank = comm.Get_rank()
-    size = comm.Get_size()
 
     ds: sbio.DataSource = sbio.DataSource(
         exp=args.experiment,
         run=args.run,
         events_per_read=args.off_per_read,
         max_dgram_size=0x4000000,  # ~67MB
-        xtc_ver=2,
-        ds_type="mpi_threads",
+        data_fmt=sbio.formats.FTraits.XTC2,
+        epolicy=sbio.execution.ExecutionPolicy.MPIThreaded,
+        exec_cfg={"main_rank": 0, "main_rank_loops": True},
     )
 
-    det: sbio.Detector = ds.detector(args.detector)
+    det: sbio.BrokerGroupWrapper = ds.group(args.detector)
     det_serial_number: str = det.serial_number
-    det_type: str = det.detector_type
+    det_type: str = det.group_type
 
     if rank == 0:
         print(
@@ -121,6 +129,10 @@ def main() -> None:
             self.step_idx: int = step_idx
             self.data: Optional[ncarray.SOArrayView] = None
 
+            # Set this so that data acquired on this thread is then processed on
+            # the thread immediately afterwards
+            self.thread_affine_output: bool = True
+
             reqs: xalgospp.ResourceRequirements = xalgospp.ResourceRequirements()
             reqs.memory_intensity = 2
             self.set_resources(reqs)
@@ -129,9 +141,9 @@ def main() -> None:
             self.data = det.get_data(self.step_idx, "raw", "raw")
 
     class CalibTask(xalgospp.Task):
-        def __init__(self, read_task: xalgospp.Task, scheduler: xalgospp.DagScheduler):
+        def __init__(self, read_task: ReadTask, scheduler: xalgospp.DagScheduler):
             super().__init__()
-            self.read_task: xalgospp.Task = read_task
+            self.read_task: ReadTask = read_task
             self.scheduler = scheduler
             self.output: Optional[ncarray.SOArray] = None
 
@@ -149,14 +161,10 @@ def main() -> None:
                 output_view: ncarray.SOArrayView = self.output.view()
                 calib_algo.process(raw_view, output_view)
 
-                # TODO: This breaks reference cycles and GC works fine after
-                #       But its not a nice UI/UX -- So improve this.
-                self.read_task.data = None
-
-    local_count: int = 0
-    frame_count: int = 0
     print_every: int = args.print
     num_events: int = args.num_events
+    count_lock: threading.Lock = threading.Lock()
+    frame_count: List[int] = [0]
 
     class GeneratorTask(xalgospp.Task):
         def __init__(
@@ -164,43 +172,34 @@ def main() -> None:
             scheduler: xalgospp.DagScheduler,
             ds: sbio.DataSource,
             builder_func: Callable[[int], List[xalgospp.Task]],
-            num_events: Optional[int] = None,
         ):
             super().__init__()
             self.scheduler: xalgospp.DagScheduler = scheduler
             self.ds: sbio.DataSource = ds
             self.builder_func: Callable[[int], List[xalgospp.Task]] = builder_func
-            self.num_events = num_events
 
         def is_generator(self) -> bool:
             return True
 
-        def execute(self):
-            global local_count
-            local_count += 1
-            step_idx: int = self.ds.next()
+        def execute(self) -> None:
+            # Using the context manager, the iteration can end regardless of early exit
+            with self.ds.steps() as steps:
+                for step_idx in steps:
+                    if num_events and step_idx >= num_events:
+                        break
 
-            if step_idx >= 0xFFFFFFFFFFFFFFFE or step_idx is None:
-                return
+                    with count_lock:
+                        frame_count[0] += 1
+                        n: int = frame_count[0]
 
-            if self.num_events and step_idx >= self.num_events:
-                return
+                    if print_every and n % print_every == 0:
+                        print(f"[Rank {rank}] {n}")
 
-            frame_count = step_idx
-            if frame_count % print_every == 0:
-                print(frame_count)
+                    self.scheduler.submit_dag_inline(self.builder_func(step_idx))
+                    if not self.scheduler.throttle_generator():
+                        break  # Scheduler is shutting down
 
-            tasks: List[xalgospp.Task] = self.builder_func(step_idx)
-            self.scheduler.submit_dag(tasks)
-
-            next_gen: GeneratorTask = GeneratorTask(
-                self.scheduler, self.ds, self.builder_func
-            )
-
-            next_gen.add_dependency(self)
-            self.scheduler.submit_dag([next_gen])
-
-    def build_dag_for_step(step_idx: int):
+    def build_dag_for_step(step_idx: int) -> List[xalgospp.Task]:
         read_task: ReadTask = ReadTask(step_idx)
         calib_task: CalibTask = CalibTask(read_task=read_task, scheduler=scheduler)
 
@@ -208,17 +207,25 @@ def main() -> None:
 
         return [read_task, calib_task]
 
+    n_io_generators: int = scheduler.num_workers
+    if args.io_generators > 0:
+        n_io_generators = args.io_generators
+
     start_time: float = time.perf_counter()
-    init_gen: GeneratorTask = GeneratorTask(
-        scheduler=scheduler,
-        ds=ds,
-        builder_func=build_dag_for_step,
-        num_events=num_events,
-    )
-    scheduler.submit_dag([init_gen])
+    for _ in range(n_io_generators):
+        scheduler.submit_dag(
+            [
+                GeneratorTask(
+                    scheduler=scheduler,
+                    ds=ds,
+                    builder_func=build_dag_for_step,
+                )
+            ]
+        )
     scheduler.wait_all()
     end_time: float = time.perf_counter()
 
+    local_count: int = frame_count[0]
     total_time_s: float = end_time - start_time
     per_evt_time_s: float = total_time_s / local_count if local_count > 0 else 0
     rate_hz: float = (1.0 / per_evt_time_s) if per_evt_time_s > 0 else 0

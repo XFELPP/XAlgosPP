@@ -186,6 +186,17 @@ elif platform.system() == "Linux":
             except Exception:
                 pass
 
+    has_ml: bool = ctypes.util.find_library("nvidia-ml") is not None
+    if not has_ml:
+        ml_stub_path: str = os.path.join(
+            os.path.dirname(__file__), "core", "stubs", "libnvidia-ml.so"
+        )
+        if os.path.exists(ml_stub_path):
+            try:
+                ctypes.CDLL(ml_stub_path, mode=ctypes.RTLD_GLOBAL)
+            except Exception:
+                pass
+
 # While the XAlgosPP modules import ncarray, and sbio -- it's too late to avoid link
 # issues The loader will search for the ncarray libs before. So must import ncarray
 # and sbio here, before import of the XAlgosPP modules

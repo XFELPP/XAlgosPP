@@ -7,6 +7,24 @@ if build_core_opt
         'utilities/mongodb.cc',
     ]
 
+    # Add DELAYLOAD for Windows as needed
+    delay_lib_link_args = []
+    if xalg_has_cuda and host_machine.system() == 'windows' and cpp.get_id() == 'msvc'
+        delay_lib_link_args = [
+            '/DELAYLOAD:nvcuda.dll',
+            'delayimp.lib',
+        ]
+    endif
+
+    # There seems to be no possible way to have a soversion included in the
+    # import lib .lib in Windows. This causes problems with delvewheel when trying
+    # to package the import libs in Python wheels. Just remove it for Windows....
+    if host_machine.system() == 'windows'
+        xalg_version_kwargs = {}
+    else
+        xalg_version_kwargs = {'version': '1', 'soversion': '1'}
+    endif
+
     libxalgospp = shared_library(
         'xalgospp',
         xalg_sources,
@@ -16,8 +34,8 @@ if build_core_opt
         install: true,
         install_dir: libxalgospp_install_dir,
         install_rpath: lib_install_rpath,
-        version: '1',
-        soversion: '1',
+        link_args: delay_lib_link_args,
+        kwargs: xalg_version_kwargs,
     )
 
     xalgospp_dep = declare_dependency(
@@ -29,6 +47,25 @@ if build_core_opt
     )
 
     if xalg_has_cuda
+        # On Windows, include paths are getting oddly mangled/quoted with nvcc...
+        # This is what I did inside ncarray for pybind11 and Python
+        nca_inc_dir = run_command(
+            py3, '-c', 'import ncarray; print(ncarray.get_include())',
+            check: false,
+        ).stdout().strip()
+
+        sbio_inc_dir = run_command(
+            py3, '-c', 'import sbio; print(sbio.get_include())',
+            check: false,
+        ).stdout().strip()
+
+        ext_cuda_args = []
+        foreach inc_dir : [nca_inc_dir, sbio_inc_dir]
+            if inc_dir != ''
+                ext_cuda_args += ['-I' + inc_dir]
+            endif
+        endforeach
+
         xalg_dev_sources = [
             'features/impl/pf8.cu',
         ]
@@ -37,14 +74,14 @@ if build_core_opt
             'devxalgospp',
             xalg_dev_sources,
             cpp_args: ['-DXALG_BUILD_API'],
-            cuda_args: xalg_cuda_args + ['-DNCA_BUILD_NCARRAY_API'],
+            cuda_args: xalg_cuda_args + ['-DNCA_BUILD_NCARRAY_API'] + ext_cuda_args,
             dependencies: deps_for_xalgospp,
             include_directories: xalgospp_headers,
             install: true,
             install_dir: libxalgospp_install_dir,
             install_rpath: lib_install_rpath,
-            version: '1',
-            soversion: '1',
+            link_args: delay_lib_link_args,
+            kwargs: xalg_version_kwargs,
 
             # Force C++ compiler linkage (no RDC so fine)
             link_language: 'cpp',
@@ -67,6 +104,16 @@ else
         ],
         include_directories: xalgospp_headers,
     )
+
+    if xalg_has_cuda
+        libdevxalgospp = cpp.find_library('devxalgospp', required: true)
+        devxalgospp_dep = declare_dependency(
+            dependencies: deps_for_xalgospp + [
+                libdevxalgospp,
+            ],
+            include_directories: xalgospp_headers,
+        )
+    endif # xalg_has_cuda
 endif # end build_core_opt
 
 installed_headers = [

@@ -1,6 +1,8 @@
-name: Build Release
+name: Build Release [Host]
 on:
   push:
+    # Disable this for forks. Its expensive, and the PyPI portion will fail later
+    if: github.repository_owner == "XFELPP"
     # For now, only build for release tags
     tags:
       - 'v*'
@@ -66,10 +68,10 @@ jobs:
         shell: pwsh
         run: |
           python -m pip install meson ninja
-          python -m pip install "ncarray==0.7.6+host" --extra-index-url https://pypi.xfelpp.org/host/
+          python -m pip install "ncarray==0.7.8+host" --extra-index-url https://pypi.xfelpp.org/host/
           $env:PKG_CONFIG_PATH = "$(nca-pkg-config --pkg-config-path):$env:PKG_CONFIG_PATH"
 
-          python -m pip install "sbio==0.1.4+host" --extra-index-url https://pypi.xfelpp.org/host/
+          python -m pip install "sbio==0.3.1+host" --extra-index-url https://pypi.xfelpp.org/host/
           $env:PKG_CONFIG_PATH = "$(sbio-pkg-config --pkg-config-path):$env:PKG_CONFIG_PATH"
 
           meson setup builddir -Dbuild_core=true -Dbuild_python=false -Dxalg_as_wheel=false -Dbuild_mpi=auto -Dbuildtype=release --prefix="$((Get-Location).Path)\install"
@@ -87,12 +89,27 @@ jobs:
           export PYTHONPATH="$HOME/Library/Python/3.10/lib/python/site-packages:/opt/homebrew/lib/python3.10/site-packages:$PYTHONPATH"
           export PYTHON="/opt/homebrew/opt/python@3.10/bin/python3.10"
           ccache -z
-          python3.10 -m pip install --break-system-packages meson ninja "ncarray==0.7.6+host" "sbio==0.1.4+host" --extra-index-url https://pypi.xfelpp.org/host/ || true
+          python3.10 -m pip install --break-system-packages meson ninja "ncarray==0.7.8+host" "sbio==0.3.1+host" --extra-index-url https://pypi.xfelpp.org/host/ || true
           export PKG_CONFIG_PATH="$(nca-pkg-config --pkg-config-path):${PKG_CONFIG_PATH}"
           export PKG_CONFIG_PATH="$(sbio-pkg-config --pkg-config-path):${PKG_CONFIG_PATH}"
+
+          # Build MPICH first - make sure to set libdir.
+          # Cannot build into the XAlgosPP project... or it will ignore it.
+          export XALG_MPI_PREFIX="${RUNNER_TEMP}/mpich-install"
+          meson subprojects download mpich
+          meson setup mpibuild subprojects/mpich-5.0.1 --prefix="${XALG_MPI_PREFIX}" --libdir=lib -Dbuildtype=release
+          meson compile -C mpibuild
+          meson install -C mpibuild
+          export PATH="${XALG_MPI_PREFIX}/bin:${PATH}"
+          export PKG_CONFIG_PATH="${XALG_MPI_PREFIX}/lib/pkgconfig:${PKG_CONFIG_PATH}"
+
           meson setup builddir -Dbuild_core=true -Dbuild_python=false -Dxalg_as_wheel=false -Dbuild_mpi=mpich -Dbuildtype=release --prefix=$(pwd)/install
           meson compile -C builddir
           meson install -C builddir
+
+          # Sigh.... AND now have to repackage.
+          (cd "${XALG_MPI_PREFIX}" && find . -type f -o -type l) > install/.mpich-files
+          cp -a "${XALG_MPI_PREFIX}/." install/
 
       - name: Build libxalgospp (Linux)
         if: runner.os == 'Linux'
@@ -109,14 +126,28 @@ jobs:
               apk add --no-cache autoconf automake libtool m4 perl make gcc g++ linux-headers musl-dev bash
           fi
           /opt/python/cp310-cp310/bin/pip install meson ninja
-          /opt/python/cp310-cp310/bin/python -m pip install "ncarray==0.7.6+host" --extra-index-url https://pypi.xfelpp.org/host/
-          /opt/python/cp310-cp310/bin/python -m pip install "sbio==0.1.4+host" --extra-index-url https://pypi.xfelpp.org/host/
+          /opt/python/cp310-cp310/bin/python -m pip install "ncarray==0.7.8+host" --extra-index-url https://pypi.xfelpp.org/host/
+          /opt/python/cp310-cp310/bin/python -m pip install "sbio==0.3.1+host" --extra-index-url https://pypi.xfelpp.org/host/
           export PKG_CONFIG_PATH="$(nca-pkg-config --pkg-config-path):${PKG_CONFIG_PATH}"
           export PKG_CONFIG_PATH="$(sbio-pkg-config --pkg-config-path):${PKG_CONFIG_PATH}"
           export PATH="/opt/python/cp310-cp310/bin:$PATH"
+
+          # Build MPICH first - make sure to set libdir.
+          # Cannot build into the XAlgosPP project... or it will ignore it.
+          export XALG_MPI_PREFIX="${RUNNER_TEMP}/mpich-install"
+          meson subprojects download mpich
+          meson setup mpibuild subprojects/mpich-5.0.1 --prefix="${XALG_MPI_PREFIX}" --libdir=lib -Dbuildtype=release
+          meson compile -C mpibuild
+          meson install -C mpibuild
+          export PATH="${XALG_MPI_PREFIX}/bin:${PATH}"
+          export PKG_CONFIG_PATH="${XALG_MPI_PREFIX}/lib/pkgconfig:${PKG_CONFIG_PATH}"
+
           meson setup builddir -Dbuild_core=true -Dbuild_python=false -Dxalg_as_wheel=false -Dbuild_mpi=mpich -Dbuildtype=release --prefix=$(pwd)/install
           meson compile -C builddir
           meson install -C builddir
+
+          # Sigh.... AND now have to repackage.
+          cp -a "${XALG_MPI_PREFIX}/." install/
 
       - name: Create Lib Release Tarball
         shell: bash
@@ -124,7 +155,7 @@ jobs:
           tar -czvf libxalgospp_${{ github.ref_name }}-host_${{ matrix.target }}.tar.gz -C install .
 
       - name: Upload Core Artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a              # v7.0.1
         with:
           name: libxalgospp_${{ github.ref_name }}-host_${{ matrix.target }}
           path: libxalgospp_${{ github.ref_name }}-host_${{ matrix.target }}.tar.gz
@@ -210,6 +241,15 @@ jobs:
           mkdir -p install
           tar -xzvf core/*.tar.gz -C install
 
+      - name: Recreate MPICH prefix (macOS)
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          # Because of all the crappy workaround MPICH has paths that are pointing
+          # to the $RUNNER_TEMP/mpich-install....
+          mkdir -p "$RUNNER_TEMP/mpich-install"
+          (cd "$GITHUB_WORKSPACE/install" && tar -cf - -T .mpich-files) | tar -xf - -C "$RUNNER_TEMP/mpich-install"
+
       - name: Extract libxalgospp (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
@@ -253,6 +293,11 @@ jobs:
           CIBW_CACHE_PATH: ".cibw_cache"
           SYSTEM_VERSION_COMPAT: "0"
           PreferredToolArchitecture: "x64"
+          # macOS problems due to Rosetta.
+          CIBW_CONFIG_SETTINGS_MACOS: >-
+            setup-args=-Dbuild_core=false
+            setup-args=-Dbuildtype=release
+            setup-args=--cross-file=${{ github.workspace }}/utilities/cibw_config/macos_cross_tools.ini
 
       - name: Build 3.9 through 3.13 wheels
         uses: pypa/cibuildwheel@294735312765b09d24a2fbec22660ce817587d55                    # v4.1.0
@@ -301,10 +346,16 @@ jobs:
           sudo apt update
           sudo apt install -y cmake ninja-build
 
+      - name: Update Version for Variant
+        shell: bash
+        run: |
+          python -c "import re; p = 'meson.build'; c = open(p).read(); open(p, 'w').write(re.sub(r\"version:\s*'([0-9]+\.[0-9]+\.[0-9]+)'\", r\"version: '\1+host'\", c))"
+
+      # HDF5 CMake fails with MPI so just turn it off for sdist
       - name: Build sdist
         run: |
           python -m pip install build
-          python -m build --sdist
+          python -m build --sdist -Csetup-args=-Dbuild_mpi=none -Csetup-args=-Dsbio:build_mpi=none
 
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a              # v7.0.1
         with:

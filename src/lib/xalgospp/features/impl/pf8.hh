@@ -28,7 +28,6 @@
 #ifdef XALG_HAS_CUDA
 #include <ncarray/ncdevarrays.cuh>
 #include <ncarray/sodevarrays.cuh>
-#include "xalgospp/features/peakfinder8_gpu.cuh"
 #endif
 
 #include <cmath>

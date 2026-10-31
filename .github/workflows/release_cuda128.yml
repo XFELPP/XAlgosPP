@@ -1,0 +1,424 @@
+name: Build Release [CUDA 12.8]
+on:
+  push:
+    # Disable this for forks. Its expensive, and the PyPI portion will fail later
+    if: github.repository_owner == "XFELPP"
+    # For now, only build for release tags
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    # Add specific dispatch action for PyPI -- can disable publishing
+    # Currently need to disable for quota reasons.
+    inputs:
+      publish_to_pypi:
+        description: "Publish compiled wheels to PyPI"
+        type: boolean
+        required: true
+        default: false
+
+jobs:
+  # Build binaries
+  build_core:
+    name: Build libxalgospp (${{ matrix.target }})
+    runs-on: ${{ matrix.os }}
+    container: ${{ matrix.container }}
+    # Disable this for forks. Its expensive, and the PyPI portion will fail later
+    if: ${{ github.repository == 'XFELPP/XAlgosPP' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: linux-glibc-x86_64
+            os: ubuntu-latest
+            container: quay.io/pypa/manylinux_2_28_x86_64
+          - target: windows-x86_64
+            os: windows-2022
+            container: null
+
+    steps:
+      - name: Free Unused Disk Space
+        if: runner.os == 'Linux'
+        run: |
+          if command -v sudo >/dev/null 2>&1; then SUDO="sudo"; else SUDO=""; fi
+          $SUDO rm -rf /usr/share/dotnet
+          $SUDO rm -rf /usr/local/lib/android
+          $SUDO rm -rf /opt/ghc
+          $SUDO rm -rf /usr/local/.ghcup
+          $SUDO rm -rf /usr/share/swift
+          $SUDO rm -rf /usr/lib/jvm
+          df -h
+
+      - name: Create Swap File
+        if: runner.os == 'Linux'
+        run: |
+          if command -v sudo >/dev/null 2>&1; then SUDO="sudo"; else SUDO=""; fi
+          $SUDO fallocate -l 12G /swapfile_xalg || $SUDO dd if=/dev/zero of=/swapfile_xalg bs=1M count=12288
+          $SUDO chmod 600 /swapfile_xalg
+          $SUDO mkswap /swapfile_xalg
+          $SUDO swapon /swapfile_xalg || true
+          free -h
+
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0                     # v7
+
+      - name: Clean Strawberry Perl (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $paths = $env:PATH -split ';' | Where-Object { $_ -notlike '*Strawberry*' }
+          $newPath = $paths -join ';'
+          echo "PATH=$newPath" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Enable Developer Command Prompt
+        uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756                  # v1
+        if: runner.os == 'Windows'
+        with:
+          arch: amd64
+
+      - name: Install MS-MPI (Windows)
+        uses: mpi4py/setup-mpi@3417e34f1394a16723d7913c236642c24e95fd5a                     # v1.4.4
+        if: runner.os == 'Windows'
+        with:
+          mpi: msmpi
+
+      - name: Grab Windows CUDA
+        uses: Jimver/cuda-toolkit@406fa58d8abbf1bad2edd217b58b073dd2f548e4                  # v0.2.34
+        if: runner.os == 'Windows'
+        id: cuda-toolkit
+        with:
+          cuda: '12.8.0'
+          use-github-cache: 'false'
+
+      - name: Build libxalgospp (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          python -m pip install meson ninja
+          python -m pip install "ncarray==0.7.8+cuda128" --extra-index-url https://pypi.xfelpp.org/cuda128/
+          $env:PKG_CONFIG_PATH = "$(nca-pkg-config --pkg-config-path):$env:PKG_CONFIG_PATH"
+
+          python -m pip install "sbio==0.3.1+cuda128" --extra-index-url https://pypi.xfelpp.org/cuda128/
+          $env:PKG_CONFIG_PATH = "$(sbio-pkg-config --pkg-config-path):$env:PKG_CONFIG_PATH"
+
+          $env:PATH += ";$env:GITHUB_WORKSPACE/install/bin;C:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.8/bin"
+          $env:CUDA_PATH = "C:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.8"
+          $env:CUDA_HOME = "C:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.8"
+          $env:LIB += ";$env:GITHUB_WORKSPACE/install/lib"
+
+          meson setup builddir -Dbuild_core=true -Dbuild_python=false -Dxalg_as_wheel=false -Dbuild_mpi=auto -Dbuildtype=release --prefix="$((Get-Location).Path)\install"
+          meson compile -C builddir
+          meson install -C builddir
+
+      - name: Build libxalgospp (Linux)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          if command -v apt-get >/dev/null; then
+              apt-get update && apt-get install -y ccache
+          elif command -v dnf >/dev/null; then
+              if [ "$(uname -m)" = "aarch64" ]; then
+                  NVIDIA_URL="https://developer.download.nvidia.com/compute/cuda/repos/rhel8/sbsa/cuda-rhel8.repo"
+              else
+                  NVIDIA_URL="https://developer.download.nvidia.com/compute/cuda/repos/rhel8/x86_64/cuda-rhel8.repo"
+              fi
+              dnf config-manager --add-repo $NVIDIA_URL && dnf clean all && dnf -y install cuda-nvcc-12-8 cuda-cudart-devel-12-8 cuda-nvrtc-devel-12-8 cuda-cccl-12-8 cuda-driver-devel-12-8 cuda-nvml-devel-12-8 libcufile-devel-12-8 --exclude="cccl-13-*"
+              ln -sf /usr/local/cuda-12.8 /usr/local/cuda
+              dnf install -y epel-release && dnf install -y ccache
+          elif command -v yum >/dev/null; then
+              yum install -y epel-release && yum install -y ccache
+          elif command -v apk >/dev/null; then
+              apk add ccache
+          fi
+          ccache -z
+          /opt/python/cp310-cp310/bin/pip install meson ninja
+          /opt/python/cp310-cp310/bin/python -m pip install "ncarray==0.7.8+cuda128" --extra-index-url https://pypi.xfelpp.org/cuda128/
+          /opt/python/cp310-cp310/bin/python -m pip install "sbio==0.3.1+cuda128" --extra-index-url https://pypi.xfelpp.org/cuda128/
+
+          mkdir install
+          /opt/python/cp310-cp310/bin/pip install meson ninja
+          export PATH="/opt/python/cp310-cp310/bin:$PATH"
+          export LD_LIBRARY_PATH="/project/install/lib:/project/install/lib64:/usr/local/cuda-12.8/lib64:/usr/local/cuda/lib64:$LD_LIBRARY_PATH"
+          export LIBRARY_PATH="/project/install/lib:/project/install/lib64:$LIBRARY_PATH"
+          export CUDA_PATH="/usr/local/cuda-12.8"
+          export CUDA_HOME="/usr/local/cuda-12.8"
+          export PATH="/usr/local/cuda-12.8/bin:/usr/local/cuda/bin:$PATH"
+          # MPICH build requires this NVCC variable
+          export NVCC="/usr/local/cuda-12.8/bin/nvcc"
+
+          export PKG_CONFIG_PATH="$(nca-pkg-config --pkg-config-path):${PKG_CONFIG_PATH}"
+          export PKG_CONFIG_PATH="$(sbio-pkg-config --pkg-config-path):${PKG_CONFIG_PATH}"
+          export PATH="/opt/python/cp310-cp310/bin:$PATH"
+
+          # Build MPICH first - make sure to set libdir.
+          # Cannot build into the XAlgosPP project... or it will ignore it.
+          export XALG_MPI_PREFIX="${RUNNER_TEMP}/mpich-install"
+          meson subprojects download mpich
+          meson setup mpibuild subprojects/mpich-5.0.1 --prefix="${XALG_MPI_PREFIX}" --libdir=lib -Dbuildtype=release
+          meson compile -C mpibuild
+          meson install -C mpibuild
+          export PATH="${XALG_MPI_PREFIX}/bin:${PATH}"
+          export PKG_CONFIG_PATH="${XALG_MPI_PREFIX}/lib/pkgconfig:${PKG_CONFIG_PATH}"
+          export LDFLAGS="-Wl,--allow-shlib-undefined ${LDFLAGS}"
+
+          meson setup builddir -Dbuild_core=true -Dbuild_python=false -Dxalg_as_wheel=false -Dbuild_mpi=mpich -Dbuildtype=release --prefix=$(pwd)/install
+          meson compile -C builddir
+          meson install -C builddir
+
+          # Sigh.... AND now have to repackage.
+          cp -a "${XALG_MPI_PREFIX}/." install/
+
+
+      - name: Create Lib Release Tarball
+        shell: bash
+        run: |
+          tar -czvf libxalgospp_${{ github.ref_name }}-cuda128_${{ matrix.target }}.tar.gz -C install .
+
+      - name: Upload Core Artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a              # v7.0.1
+        with:
+          name: libxalgospp_${{ github.ref_name }}-cuda128_${{ matrix.target }}
+          path: libxalgospp_${{ github.ref_name }}-cuda128_${{ matrix.target }}.tar.gz
+
+  build_wheels:
+    name: Build wheels on ${{ matrix.os }}
+    needs: build_core
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      max-parallel: 6
+      matrix:
+        # windows-latest was updated to MSVC 19.51 which is outside of our supported
+        # compiler matrix so pinned to windows-2022 for now
+        include:
+          - target: linux-glibc-x86_64
+            os: ubuntu-latest
+            cibw_skip: "*musllinux*"
+          - target: windows-x86_64
+            os: windows-2022
+            cibw_skip: ""
+
+    steps:
+      - name: Free Unused Disk Space
+        if: runner.os == 'Linux'
+        run: |
+          if command -v sudo >/dev/null 2>&1; then SUDO="sudo"; else SUDO=""; fi
+          $SUDO rm -rf /usr/share/dotnet
+          $SUDO rm -rf /usr/local/lib/android
+          $SUDO rm -rf /opt/ghc
+          $SUDO rm -rf /usr/local/.ghcup
+          $SUDO rm -rf /usr/share/swift
+          $SUDO rm -rf /usr/lib/jvm
+          df -h
+
+      - name: Create Swap File
+        if: runner.os == 'Linux'
+        run: |
+          if command -v sudo >/dev/null 2>&1; then SUDO="sudo"; else SUDO=""; fi
+          $SUDO fallocate -l 12G /swapfile_xalg || $SUDO dd if=/dev/zero of=/swapfile_xalg bs=1M count=12288
+          $SUDO chmod 600 /swapfile_xalg
+          $SUDO mkswap /swapfile_xalg
+          $SUDO swapon /swapfile_xalg || true
+          free -h
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0                     # v7
+
+        # MANUALLY try and pull this down. So Windows doesn't break.... every time
+      - name: PRE-DOWNLOAD
+        shell: bash
+        run: |
+          mkdir -p .cibw_cache
+          for i in {1..5}; do
+            curl -L -o .cibw_cache/virtualenv-20.27.1.pyz https://raw.githubusercontent.com/pypa/get-virtualenv/20.27.1/public/virtualenv.pyz && break || sleep 15
+          done
+
+      # Cache pip (for speedup)
+      - name: Cache pip
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9                        # v6
+        with:
+          path: |
+            ~/.cache/pip
+            ~/Library/Caches/pip
+            ~\AppData\Local\pip\Cache
+          key: ${{ runner.os }}-pip-${{ hashFiles('pyproject.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
+
+      # Cache ccache (for speedup)
+      - name: Cache ccache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9                        # v6
+        with:
+          path: .ccache
+          key: ${{ runner.os }}-ccache-${{ github.ref }}
+          restore-keys: |
+            ${{ runner.os }}-ccache-
+
+      # interpreter caching (to avoid running into HTTP request rate limiting)
+      - name: Cache cibuildwheel
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9                        # v6
+        with:
+          path: .cibw_cache
+          key: ${{ runner.os }}-cibw-v1
+          restore-keys: |
+            ${{ runner.os }}-cibw-
+
+      - name: Grab Windows CUDA
+        uses: Jimver/cuda-toolkit@406fa58d8abbf1bad2edd217b58b073dd2f548e4                  # v0.2.34
+        if: runner.os == 'Windows'
+        id: cuda-toolkit
+        with:
+          cuda: '12.8.0'
+          use-github-cache: 'false'
+
+      - name: Download libxalgospp
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c            # v8
+        with:
+          name: libxalgospp_${{ github.ref_name }}-cuda128_${{ matrix.target }}
+          path: core
+
+      - name: Extract libxalgospp (Linux/macOS)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          mkdir -p install
+          tar -xzvf core/*.tar.gz -C install
+
+      - name: Extract libxalgospp (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Path install -Force
+          Get-ChildItem core/*.tar.gz | ForEach-Object { tar xzvf $_.FullName -C install }
+
+      - name: Clean Strawberry Perl (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $paths = $env:PATH -split ';' | Where-Object { $_ -notlike '*Strawberry*' }
+          $newPath = $paths -join ';'
+          echo "PATH=$newPath" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Enable Developer Command Prompt
+        uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756                  # v1
+        if: runner.os == 'Windows'
+        with:
+          arch: amd64
+
+      - name: Install MS-MPI (Windows)
+        uses: mpi4py/setup-mpi@3417e34f1394a16723d7913c236642c24e95fd5a                     # v1.4.4
+        if: runner.os == 'Windows'
+        with:
+          mpi: msmpi
+
+      - name: Update Version for Variant
+        shell: bash
+        run: |
+          python -c "import re; p = 'meson.build'; c = open(p).read(); open(p, 'w').write(re.sub(r\"version:\s*'([0-9]+\.[0-9]+\.[0-9]+)'\", r\"version: '\1+cuda128'\", c))"
+
+      - name: Build 3.8 wheels
+        # NOTE: cibuildwheel does not support Python 3.8 after the 3.x series
+        uses: pypa/cibuildwheel@8d2b08b68458a16aeb24b64e68a09ab1c8e82084                    # v3.4.1
+        with:
+          config-file: "{package}/utilities/cibw_config/cuda128.toml"
+        env:
+          CIBW_BUILD: "cp38-*"
+          CIBW_SKIP: "${{ matrix.cibw_skip }} *i686 *-win32"
+          CIBW_CACHE_PATH: ".cibw_cache"
+          SYSTEM_VERSION_COMPAT: "0"
+          PreferredToolArchitecture: "x64"
+
+      - name: Build 3.9 through 3.13 wheels
+        uses: pypa/cibuildwheel@294735312765b09d24a2fbec22660ce817587d55                    # v4.1.0
+        with:
+          config-file: "{package}/utilities/cibw_config/cuda128.toml"
+        env:
+          CIBW_CACHE_PATH: ".cibw_cache"
+          CIBW_BUILD: "cp39-* cp310-* cp311-* cp312-* cp313-*"
+          CIBW_SKIP: "${{ matrix.cibw_skip }} *i686 *-win32"
+          SYSTEM_VERSION_COMPAT: "0"
+          PreferredToolArchitecture: "x64"
+
+      - name: Build 3.14(t) and 3.15(t) wheels
+        uses: pypa/cibuildwheel@294735312765b09d24a2fbec22660ce817587d55                    # v4.1.0
+        with:
+          config-file: "{package}/utilities/cibw_config/cuda128.toml"
+        env:
+          CIBW_CACHE_PATH: ".cibw_cache"
+          CIBW_ENABLE: "cpython-prerelease"
+          CIBW_BUILD: "cp314-* cp314t-* cp315-* cp315t-*"
+          CIBW_SKIP: "${{ matrix.cibw_skip }} *i686 *-win32"
+          SYSTEM_VERSION_COMPAT: "0"
+          PreferredToolArchitecture: "x64"
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a              # v7.0.1
+        with:
+          name: cibw-wheels-${{ matrix.os }}-${{ strategy.job-index }}
+          path: ./wheelhouse/*.whl
+
+  # Build source distribution
+  build_sdist:
+    name: Build source distribution
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0                     # v7
+
+      - name: Setup Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1                 # v6
+        with:
+          python-version: "3.11" # Shouldn't matter
+
+      # Meson setup runs, so we still need these unfortunately (for subprojects)
+      # The code will not actually be compiled for the sdist
+      - name: Install dependencies
+        run: |
+          sudo apt update
+          sudo apt install -y cmake ninja-build
+
+      - name: Update Version for Variant
+        shell: bash
+        run: |
+          python -c "import re; p = 'meson.build'; c = open(p).read(); open(p, 'w').write(re.sub(r\"version:\s*'([0-9]+\.[0-9]+\.[0-9]+)'\", r\"version: '\1+cuda128'\", c))"
+
+      # HDF5 CMake fails with MPI so just turn it off for sdist
+      - name: Build sdist
+        run: |
+          python -m pip install build
+          python -m build --sdist -Csetup-args=-Dbuild_mpi=none -Csetup-args=-Dsbio:build_mpi=none
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a              # v7.0.1
+        with:
+          name: cibw-cuda128-sdist
+          path: dist/*.tar.gz
+
+  # Create release, publish
+  create_release_and_publish_to_pypi:
+    needs: [build_core, build_wheels, build_sdist]
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write
+      contents: write
+    if: (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')) || github.event_name == 'workflow_dispatch'
+    steps:
+      - name: Gather build artifacts
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c            # v8
+        with:
+          pattern: cibw-*
+          path: dist
+          merge-multiple: true
+
+      - name: Publish to PyPI
+        # Force need to manually specify the PyPI publishing
+        # Currently disabled by default pending quota request
+        if: inputs.publish_to_pypi == true
+        uses: pypa/gh-action-pypi-publish@cef221092ed1bacb1cc03d23a2d87d1d172e277b          # v1.14.0
+
+      - name: Gather libxalgospp
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c            # v8
+        with:
+          pattern: libxalgospp*
+          path: dist
+          merge-multiple: true
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@718ea10b132b3b2eba29c1007bb80653f286566b          # v3.0.1
+        with:
+          files: dist/*
+          # Only the host variant adds release notes, to prevent multiple copies.

@@ -39,6 +39,7 @@ typedef SSIZE_T ssize_t;
 #include <atomic>
 #include <condition_variable>
 #include <cstddef>
+#include <functional>
 #include <map>
 #include <memory>
 #include <thread>
@@ -247,6 +248,33 @@ namespace xalgospp::scheduling {
     void submit_dag(std::vector<std::shared_ptr<Task>> tasks);
 
     /**
+     * Run a complete DAG starting on the calling thread (for use within a Task).
+     *
+     * The roots are executed right away on this thread, as are the children of any
+     * Task with a thread-affine output. Other released work is queued as usual. IO
+     * lanes use this to keep an sbio step, and its thread-local data, on the thread
+     * that took it.
+     *
+     * @param[in] tasks The complete DAG - the root task contains the edges for its
+     *            dependent tasks.
+     */
+    void submit_dag_inline(std::vector<std::shared_ptr<Task>> tasks);
+
+    /**
+     * Apply generator back pressure from within a running generator Task.
+     *
+     * While throttled, the calling thread runs queued work instead of idling.
+     *
+     * @returns false if the scheduler is shutting down and the generator should stop.
+     */
+    bool throttle_generator();
+
+    /**
+     * @returns The number of worker threads.
+     */
+    std::size_t num_workers() const { return m_num_workers; }
+
+    /**
      * Enqueue a single task directly for execution.
      *
      * @param[in] task The task to be enqueued for execution.
@@ -407,6 +435,46 @@ namespace xalgospp::scheduling {
 
     void record_task_metrics(std::shared_ptr<Task> task, std::uint64_t elapsed_ns);
 
+    /**
+     * Find the next Task for a worker (local, global, then remote queues).
+     *
+     * Memory-bound Tasks that cannot get a token are parked in a deferred queue, and
+     * the search continues for other work. Deferred Tasks go first once a token frees.
+     *
+     * @param[in] home_node The NUMA node of the calling worker.
+     * @param[in] allow_generators Whether generator Tasks may be returned.
+     * @returns The Task (or nullptr) and whether a high-memory token was taken for it.
+     */
+    std::pair<std::shared_ptr<Task>, bool> find_task(numa_node_t home_node,
+                                                      bool allow_generators);
+
+    /**
+     * Execute a Task and then any released work that continues on this thread.
+     *
+     * @param[in] task The Task to run.
+     * @param[in] has_token Whether a high-memory token is held for the Task.
+     */
+    void run_task(std::shared_ptr<Task> task, bool has_token);
+
+    /**
+     * Execute a single Task (exceptions are logged), recording metrics if profiling.
+     */
+    void execute_task(const std::shared_ptr<Task>& task);
+
+    /**
+     * Whether a Task is memory-bandwidth bound and needs a high-memory token.
+     */
+    bool is_high_mem(const Task& task) const;
+
+    bool try_acquire_hm_token();
+    bool acquire_hm_token_blocking();
+    void release_hm_token();
+
+    /**
+     * Wake one sleeping worker, if any are sleeping.
+     */
+    void notify_worker();
+
     Config m_config;
     std::map<numa_node_t, std::vector<int>> m_topology;    ///< Mapping of node topology
     std::vector<std::thread> m_workers;                    ///< Complete set of workers
@@ -431,8 +499,27 @@ namespace xalgospp::scheduling {
 
     // Simple resource budget/token management
     std::atomic<std::size_t> m_active_high_mem_tasks { 0 };
+    std::atomic<std::size_t> m_hm_waiters { 0 }; ///< Threads blocked waiting for a token
+    WorkQueue m_hm_deferred;                     ///< High-memory Tasks waiting for a token
 
-    void on_task_complete(std::shared_ptr<Task> completed_task);
+    // Autotuner's tunables
+    std::atomic<std::size_t> m_max_concurrent_high_mem { 0 };
+    std::atomic<std::size_t> m_max_concurrency_multiplier { 0 };
+
+    std::size_t m_num_workers { 0 };               ///< Fixed before workers launch
+    std::atomic<std::size_t> m_num_sleeping { 0 }; ///< Workers waiting on m_job_cv
+
+    /**
+     * Release the children of a completed Task, and do the completion bookkeeping.
+     *
+     * @param[in] completed_task The Task which just finished executing.
+     * @param[out] run_here Released children which must run on this thread next
+     *             (the completed Task's output is thread-affine).
+     * @param[out] continuation Otherwise, one released child to continue with here.
+     */
+    void on_task_complete(std::shared_ptr<Task> completed_task,
+                          std::vector<std::shared_ptr<Task>>& run_here,
+                          std::shared_ptr<Task>& continuation);
 
     // ---- Synchronization primitives and memory for shared buffer pools ---- //
     std::mutex m_pool_mutex;
@@ -446,7 +533,8 @@ namespace xalgospp::scheduling {
     // ---- Utilities for Management when using MPI ---- //
     MPI_Comm m_world_comm { MPI_COMM_NULL };
     int m_world_rank { -1 };
-    int m_world_size { -1 };
+    int m_world_size { -1 }; ///< Ranks in the entire MPI world
+    int m_local_size { 1 };  ///< Ranks on this node
 
     std::vector<MPI_Comm> m_shmem_comms;  ///< Any communicators used for Algorithms
     std::vector<RCWindow> m_algo_windows; ///< Backing windows for staged Algorithm data
@@ -454,6 +542,7 @@ namespace xalgospp::scheduling {
     // ---- Utilities for Autotuning and Task Profiling ---- //
     std::atomic<std::size_t> m_submissions_count { 0 }; ///< Number of DAGs submitted
     std::atomic<bool> m_profiling_phase { true };       ///< Whether currently profiling
+    std::atomic<bool> m_autotune_started { false };     ///< Autotuning runs only once
 
     TaskProfileData m_io_profile;      ///< Profile for IO-type Tasks
     TaskProfileData m_compute_profile; ///< Profiel for compute/processing Tasks

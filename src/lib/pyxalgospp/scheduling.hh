@@ -25,8 +25,11 @@
 #include <ncarray/ncarrays.hh>
 #include <ncarray/soarrays.hh>
 #include <pybind11/pybind11.h>
+#include <pybind11/trampoline_self_life_support.h>
 
+#include <atomic>
 #include <memory>
+#include <stdexcept>
 
 namespace py = pybind11;
 
@@ -34,67 +37,61 @@ namespace pyxalgospp::scheduling {
   /**
    * A minimal trampoline class for allowing Python Task subclassing with DagScheduler.
    */
-  class PyTask : public xalgospp::scheduling::Task {
+  class PyTask
+    : public xalgospp::scheduling::Task, public py::trampoline_self_life_support {
   public:
     using xalgospp::scheduling::Task::Task;
 
-    void attach_python_object(py::object obj) {
-      if (!m_py_obj) {
-        m_py_obj = obj;
-      }
-    }
-
-    void release_python_object() {
-      py::gil_scoped_acquire acquire;
-      m_py_obj = py::object();
-      if (m_data && !m_data.is_none()) {
-        m_data = py::object();
-      }
-    }
-
-    ~PyTask() override {
-      if (m_py_obj || m_data) {
-        release_python_object();
-      }
+    void keep_alive_until_executed(std::shared_ptr<xalgospp::scheduling::Task> self) {
+      m_keep_alive = std::move(self);
     }
 
     void execute() override {
-      {
-        py::gil_scoped_acquire acquire;
+      py::gil_scoped_acquire acquire;
+      struct Release {
+        std::shared_ptr<xalgospp::scheduling::Task>& ptr;
+
+        ~Release() { ptr.reset(); }
+      };
+
+      Release release { m_keep_alive };
+
+      try {
         PYBIND11_OVERRIDE_PURE(void, xalgospp::scheduling::Task, execute);
+      } catch (py::error_already_set& err) {
+        // Need to be holding GIL
+        throw std::runtime_error(err.what());
       }
-      release_python_object();
     }
 
     bool is_generator() const override {
-      py::gil_scoped_acquire acquire;
-      PYBIND11_OVERRIDE(bool, xalgospp::scheduling::Task, is_generator);
-    }
+      int cached { m_is_generator.load(std::memory_order_acquire) };
+      if (cached < 0) {
+        // Check once and thten cache to speed up query on hot-path
+        bool value { false };
+        {
+          py::gil_scoped_acquire acquire;
+          auto check_is_generator = [this]() -> bool {
+            PYBIND11_OVERRIDE(bool, xalgospp::scheduling::Task, is_generator);
+          };
+          value = check_is_generator();
+        }
 
-    py::object get_data() const {
-      py::gil_scoped_acquire acquire;
-      if (m_data && !m_data.is_none()) {
-        auto weak_mod = py::module_::import("weakref");
+        if (value) {
+          cached = 1;
+        } else {
+          cached = 0;
+        }
 
-        return weak_mod.attr("proxy")(m_data);
+        m_is_generator.store(cached, std::memory_order_release);
       }
-      return py::none();
-    }
-    void set_data(py::object data) { m_data = data; }
 
-    py::object get_parent() const { return m_parent_obj; }
-    void set_parent(py::object task) {
-      py::gil_scoped_acquire acquire;
-      if (task && !task.is_none()) {
-        auto weak_mod = py::module_::import("weakref");
-        m_parent_obj = weak_mod.attr("proxy")(task);
-      }
+      return cached == 1;
     }
 
   private:
-    py::object m_py_obj;
-    py::object m_parent_obj;
-    py::object m_data;
+    mutable std::atomic<int> m_is_generator { -1 };
+    std::shared_ptr<xalgospp::scheduling::Task> m_keep_alive;
   };
 } // namespace pyxalgospp::scheduling
 

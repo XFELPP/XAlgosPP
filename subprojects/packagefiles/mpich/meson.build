@@ -1,4 +1,4 @@
-project('mpich', 'c', version: '5.0.1')
+project('mpich', 'c', 'cpp', version: '5.0.1')
 
 ext_mod = import('unstable-external_project')
 
@@ -25,15 +25,15 @@ configure_opts = [
     'CXX=' + ' '.join(cxx.cmd_array()),
 ]
 
-# musl fails ....
-is_musl = not cc.has_header('gnu/libc-version.h')
+# musl fails .... -- also make sure macOS doesn't get included....
+is_musl = not cc.has_header('gnu/libc-version.h') and host_machine.system() == 'linux'
 
 ucx_dep = dependency('ucx', required: false)
 if ucx_dep.found()
     message('UCX found. Configuring MPICH with UCX netmod.')
     configure_opts += [
         '--with-device=ch4:ucx',
-        '--with-ucx=auto',
+        '--with-ucx=yes',
     ]
 else
     if is_musl
@@ -78,7 +78,7 @@ if cuda_dep.found()
     else
         message('CUDA found, but not sure where CUDA home is... MPI may fail to compile...')
         configure_opts += [
-            '--with-cuda=auto',
+            '--with-cuda=yes',
         ]
     endif
 endif
@@ -89,3 +89,18 @@ mpich_proj = ext_mod.add_project(
 )
 
 mpich_dep = mpich_proj.dependency('mpi')
+
+# To build it standalone BEFORE the main project, in CI, need to create this fake
+# target. Otherwise nothing happens since nothing consumes the dependency above.
+if meson.is_subproject() == false
+    mpich_force_src = configure_file(
+        output: 'mpich_force_build.c',
+        command: [
+            py3, '-c', 'import sys; open(sys.argv[1], "w").write("int mpich_force_build_symbol;\\n")', '@OUTPUT@'
+        ],
+    )
+    static_library('mpich_force_build', mpich_force_src,
+        dependencies: mpich_dep,
+        install: false,
+    )
+endif

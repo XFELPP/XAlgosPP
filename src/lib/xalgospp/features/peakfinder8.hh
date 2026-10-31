@@ -37,6 +37,7 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <span>
 #include <vector>
 #include <algorithm>
@@ -150,6 +151,15 @@ namespace xalgospp::features {
         m_d_mask_r_map = impl::DevImageData(m_num_pixels);
         m_d_rstats = impl::DevRadialStatistics(m_params.num_radial_bins);
         m_d_peak_data = impl::DevPeakLabelData(m_num_pixels);
+
+        cudaMemcpy(reinterpret_cast<void*>(m_d_mask_r_map.mask),
+                   m_staged_mask.data(),
+                   mask_bytes,
+                   cudaMemcpyHostToDevice);
+        cudaMemcpy(reinterpret_cast<void*>(m_d_mask_r_map.r_map),
+                   m_staged_r_map.data(),
+                   r_map_bytes,
+                   cudaMemcpyHostToDevice);
 #else
         throw std::runtime_error("[Peakfinder8] DevTag requested but CUDA is not enabled!");
 #endif
@@ -185,6 +195,7 @@ namespace xalgospp::features {
     void set_staged_data_impl(std::uint8_t* buf, std::size_t nbytes) {
       m_serialized_data.assign(buf, buf + nbytes);
       std::size_t mask_bytes { m_num_pixels * sizeof(bool) };
+      std::size_t r_map_bytes { m_num_pixels * sizeof(float) };
 
       m_staged_mask =
         std::span<const bool>(reinterpret_cast<const bool*>(m_serialized_data.data()),
@@ -196,10 +207,20 @@ namespace xalgospp::features {
 
       if constexpr (std::is_same_v<MemTag, ncarray::DevTag>) {
 #ifdef XALG_HAS_CUDA
-        allocate_gpu_buffers();
-        cudaMemcpy(m_d_mask.get(), m_staged_mask.data(), mask_bytes, cudaMemcpyHostToDevice);
-        cudaMemcpy(m_d_r_map.get(), m_staged_r_map.data(), nbytes - mask_bytes,
+        m_d_mask_r_map = impl::DevImageData(m_num_pixels);
+        m_d_rstats = impl::DevRadialStatistics(m_params.num_radial_bins);
+        m_d_peak_data = impl::DevPeakLabelData(m_num_pixels);
+
+        cudaMemcpy(reinterpret_cast<void*>(m_d_mask_r_map.mask),
+                   m_staged_mask.data(),
+                   mask_bytes,
                    cudaMemcpyHostToDevice);
+        cudaMemcpy(reinterpret_cast<void*>(m_d_mask_r_map.r_map),
+                   m_staged_r_map.data(),
+                   r_map_bytes,
+                   cudaMemcpyHostToDevice);
+#else
+        throw std::runtime_error("[Peakfinder8] DevTag requested but CUDA is not enabled!");
 #endif
       }
     }
@@ -308,8 +329,9 @@ namespace xalgospp::features {
 #ifdef XALG_HAS_CUDA
     template <typename InputArg, typename OutputArg>
     void process_gpu(const InputArg& data, OutputArg& peaks_out) const {
-      int threads { 256 };
-      int blocks { (m_num_pixels + threads - 1) / threads };
+#ifdef __CUDACC__
+      constexpr unsigned threads { 256 };
+      unsigned blocks { static_cast<unsigned>((m_num_pixels + threads - 1) / threads) };
 
       for (int i = 0; i < m_params.iterations; ++i) {
         impl::k_radial_stats_accumulate<<<blocks, threads>>>(static_cast<const float*>(data.data()),
@@ -317,11 +339,11 @@ namespace xalgospp::features {
                                                              m_d_mask_r_map.r_map,
                                                              m_d_rstats.r_threshold,
                                                              m_d_rstats.l_threshold,
-                                                             m_d_rstats.sum,
-                                                             m_d_rstats.sum_sq,
+                                                             static_cast<int>(m_num_pixels),
+                                                             m_d_rstats.num_bins,
                                                              m_d_rstats.count,
-                                                             m_num_pixels,
-                                                             m_d_rstats.num_bins);
+                                                             m_d_rstats.sum,
+                                                             m_d_rstats.sum_sq);
 
         impl::k_radial_stats_finalize<<<(m_params.num_radial_bins + 255)/256, 256>>>(m_d_rstats.offset,
                                                                                      m_d_rstats.sigma,
@@ -341,7 +363,13 @@ namespace xalgospp::features {
                                                m_d_mask_r_map.r_map,
                                                m_d_peak_data.labels_v1,
                                                m_num_pixels,
-                                               m_params.num_radial_bins);
+                                               m_params.num_radial_bins,
+                                               m_d_peak_data.label_sum_i,
+                                               m_d_peak_data.label_sum_fs,
+                                               m_d_peak_data.label_sum_ss,
+                                               m_d_peak_data.label_max_i,
+                                               m_d_peak_data.label_npix,
+                                               m_d_peak_data.peak_count);
 
       // 6 ping-pong iterations --- should capture up to ~50 pixel blobs
       for (int i = 0; i < 3; ++i) {
@@ -382,12 +410,15 @@ namespace xalgospp::features {
                                                            m_params.min_SNR,
                                                            m_params.min_pixel_count,
                                                            m_params.max_pixel_count,
-                                                           reinterpret_cast<GPUPeak*>(peaks_out.data()),
+                                                           reinterpret_cast<Peak*>(peaks_out.data()),
                                                            m_d_peak_data.peak_count,
                                                            m_params.max_number_peaks);
       cudaDeviceSynchronize();
+#else
+      throw std::runtime_error("Trying to call a GPU routine (process_gpu) from CPU-C++ code!");
+#endif // __CUDACC__
     }
-#endif
+#endif // XALG_HAS_CUDA
   };
 } // namespace xalgospp::features
 

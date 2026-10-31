@@ -108,8 +108,23 @@ namespace xalgospp::scheduling {
      */
     virtual bool is_generator() const { return false; }
 
+    /**
+     * Mark this Task's output as living in thread-local storage.
+     *
+     * E.g. a view into sbio's per-thread Data buffers, which the next fetch on the
+     * same thread overwrites. The children this Task releases are then run on the
+     * same thread, right after it, before the thread can run anything else.
+     *
+     * @note The children of such a Task must not have other parents still pending.
+     */
+    void set_thread_affine_output(bool affine) { m_thread_affine_output = affine; }
+
+    bool thread_affine_output() const { return m_thread_affine_output; }
+
   private:
     friend class DagScheduler;
+
+    bool m_thread_affine_output { false };
 
     LocalityHint m_locality;
     std::function<LocalityHint()> m_locality_resolver;

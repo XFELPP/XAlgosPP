@@ -2,7 +2,7 @@ project(
     'xalgospp',
     'c',
     'cpp',
-    version: '0.1.1',
+    version: '0.2.0',
     meson_version: '>=1.10.0',
     default_options: [
         'c_std=c17',
@@ -23,7 +23,18 @@ if xalg_has_cuda
     cuda_version = cuda.version()
 endif
 
+using_langs = ['c', 'cpp']
+if xalg_has_cuda
+    using_langs += ['cuda']
+endif
+
 cpp = meson.get_compiler('cpp')
+
+add_project_arguments(
+    '-DOMPI_SKIP_MPICXX',
+    '-DMPICH_SKIP_MPICXX',
+    language : ['c', 'cpp', 'cuda']
+)
 
 # Check compiler versions (for C++23 suppport especially)
 if cpp.get_id() == 'gcc'
@@ -82,11 +93,18 @@ endif
 
 # For Windows adjust for limit of 65,536 COFF sections
 if cpp.get_id() == 'msvc'
-    add_project_arguments('/bigobj', '/DNOMINMAX', language: 'cpp')
+    add_project_arguments(
+        '/bigobj',
+        '/DNOMINMAX',
+        '/Zc:preprocessor',
+        language: 'cpp',
+    )
+
     if xalg_has_cuda
         add_project_arguments(
             '-Xcompiler=/bigobj',
             '-Xcompiler=/DNOMINMAX',
+            '-Xcompiler=/Zc:preprocessor',
             '-D_SOURCE_LOCATION_',
             language: 'cuda',
         )
@@ -261,14 +279,8 @@ else
     found_mpi = false
     bundle_mpi = false # Only bundle if using subproject
     if try_sys
-        if host_machine.system() == 'windows'
-            mpi_dep = dependency('mpi', language: 'c', required: false)
-        else
-            mpi_dep = dependency('mpi', required: false)
-            if not mpi_dep.found()
-                mpi_dep = dependency('mpi', language: 'c', required: false)
-            endif
-        endif
+        mpi_dep = dependency('mpi', language: 'c', required: false)
+
         if mpi_dep.found()
             found_mpi = true
         endif
@@ -293,20 +305,28 @@ else
     else
         message('Adding MPI Dependency')
 
-        add_project_arguments('-DSBIO_HAS_MPI', language: ['cpp', 'cuda'])
-        add_project_arguments('-DXALG_HAS_MPI', language: ['cpp', 'cuda'])
+        add_project_arguments('-DSBIO_HAS_MPI', language: using_langs)
+        add_project_arguments('-DXALG_HAS_MPI', language: using_langs)
         deps_for_xalgospp += mpi_dep
 
         # ---------------------- Also will use `hwloc` ---------------------- #
-        hwloc_dep = dependency('hwloc', required: false)
-        if not hwloc_dep.found()
-            message('Falling back to building hwloc by subproject.')
-
-            hwloc_proj = subproject('hwloc')
-            hwloc_dep = hwloc_proj.get_variable('hwloc_dep')
-        endif
+        # Not understanding where hwloc appears in all cases in CI - and its usually wrong
+        # Just ALWAYS use the subproject.
+        message('Building hwloc by subproject.')
+        hwloc_proj = subproject('hwloc')
+        hwloc_dep = hwloc_proj.get_variable('hwloc_dep')
         message('Adding the `hwloc` dependency.')
         deps_for_xalgospp += hwloc_dep
+
+        # hwloc_dep = dependency('hwloc', required: false)
+        # if not hwloc_dep.found()
+        #    message('Falling back to building hwloc by subproject.')
+        #
+        #    hwloc_proj = subproject('hwloc')
+        #    hwloc_dep = hwloc_proj.get_variable('hwloc_dep')
+        # endif
+        # message('Adding the `hwloc` dependency.')
+        # deps_for_xalgospp += hwloc_dep
     endif
 endif # MPI builds
 
@@ -413,6 +433,7 @@ deps_for_xalgospp += ncarray_dep
 # xalg_has_openmp = openmp_dep.found()
 # if xalg_has_openmp
 #     add_project_arguments('-DXALG_HAS_OPENMP', language: ['cpp', 'cuda'])
+#     add_project_arguments('-DXALG_HAS_OPENMP', language: using_langs)
 #     deps_for_xalgospp += openmp_dep
 # endif
 
@@ -430,16 +451,22 @@ libsbio = cpp.find_library('sbio', required: false)
 if libsbio.found()
     sbio_libs = [libsbio]
 
+    libsbioH5driver = cpp.find_library('sbioH5driver', required: false)
+    if libsbioH5driver.found()
+        add_project_arguments('-DSBIO_HAS_HDF5', language: using_langs)
+        sbio_libs += libsbioH5driver
+    endif
+
     # Check which components may have been built
     libxtc1slim = cpp.find_library('xtc1slim', required: false)
     if libxtc1slim.found()
-        add_project_arguments('-DSBIO_HAS_XTC1', language: ['cpp', 'cuda'])
+        add_project_arguments('-DSBIO_HAS_XTC1', language: using_langs)
         sbio_libs += libxtc1slim
     endif
 
     libxtc2slim = cpp.find_library('xtc2slim', required: false)
     if libxtc2slim.found()
-        add_project_arguments('-DSBIO_HAS_XTC2', language: ['cpp', 'cuda'])
+        add_project_arguments('-DSBIO_HAS_XTC2', language: using_langs)
         sbio_libs += libxtc2slim
     endif
 
@@ -516,13 +543,17 @@ print(";".join(libs).replace("\r", ""))
             sbio_proj = subproject('sbio')
             sbio_dep = sbio_proj.get_variable('sbio_dep')
             sbio_fmts = sbio_proj.get_variable('sbio_enabled_formats')['formats']
+            if 'hdf5' in sbio_fmts
+                message('Enabling HDF5 support as it was built by sbio')
+                add_project_arguments('-DSBIO_HAS_HDF5', language: using_langs)
+            endif
             if 'xtc1' in sbio_fmts
                 message('Enabling XTC1 support as it was built by sbio')
-                add_project_arguments('-DSBIO_HAS_XTC1', language: ['cpp', 'cuda'])
+                add_project_arguments('-DSBIO_HAS_XTC1', language: using_langs)
             endif
             if 'xtc2' in sbio_fmts
                 message('Enabling XTC2 support as it was built by sbio')
-                add_project_arguments('-DSBIO_HAS_XTC2', language: ['cpp', 'cuda'])
+                add_project_arguments('-DSBIO_HAS_XTC2', language: using_langs)
             endif
         else
             fs = import('fs')
@@ -533,12 +564,16 @@ print(";".join(libs).replace("\r", ""))
                         message('Skipping ' + lib + ' from sbio list. Causes problem on macOS!')
                     else
                         libname = fs.name(lib)
+                        if libname.contains('sbioH5')
+                            add_project_arguments('-DSBIO_HAS_HDF5', language: using_langs)
+                        endif
+
                         if libname.contains('xtc1')
-                            add_project_arguments('-DSBIO_HAS_XTC1', language: ['cpp', 'cuda'])
+                            add_project_arguments('-DSBIO_HAS_XTC1', language: using_langs)
                         endif
 
                         if libname.contains('xtc2')
-                            add_project_arguments('-DSBIO_HAS_XTC2', language: ['cpp', 'cuda'])
+                            add_project_arguments('-DSBIO_HAS_XTC2', language: using_langs)
                         endif
                         if not lib.endswith('.dll') # Windows guard....
                             sbio_link_args += [lib]
@@ -567,7 +602,7 @@ print(";".join(libs).replace("\r", ""))
 endif
 deps_for_xalgospp += sbio_dep
 
-if host_machine.system() == 'darwin'
+if host_machine.system() != 'windows'
     # macOS CI is the worst. Fails in all psosible configurations
     # BUILD ONLY WITH SUBPROJECT, STATIC ONLY, DONT ALLOW ANYTHING TO BE PULLED BY HOMEBREW
     fmt_proj = subproject('fmt', default_options: ['default_library=static'])
