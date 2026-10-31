@@ -155,12 +155,15 @@ namespace xalgospp::features::impl {
   /**
    * Finalize the radial statistics and compute remaining metrics.
    *
+   * @note The kernel will reset r_count, r_sum, and r_sum_sq for the next iteration.
+   *
    * @param[out] r_offset Mean background offset per radial bin
    * @param[out] r_sigma Background std dev per radial bin
    * @param[out] r_threshold Upper intensity threshold for candidate per radial bin
    * @param[out] l_threshold Lower intensity threshold for candidate per radial bin
-   * @param[out] r_sum Intermediate sum of pixel intensities per radial bin
-   * @param[out] r_sum_sq Intermediate squared sum of intensities per radial bin
+   * @param[in] r_sum Intermediate sum of pixel intensities per radial bin
+   * @param[in] r_sum_sq Intermediate squared sum of intensities per radial bin
+   * @param[in] r_count Pixel count per radial bin
    * @param[in] num_bins The number of radial bins.
    * @param[in] adc_threshold The cut-off for the pixel intensity.
    */
@@ -168,15 +171,18 @@ namespace xalgospp::features::impl {
                                                    float* r_sigma,
                                                    float* r_threshold,
                                                    float* l_threshold,
-                                                   const float* r_sum,
-                                                   const float* r_sum_sq,
-                                                   const int* r_count,
+                                                   float* r_sum,
+                                                   float* r_sum_sq,
+                                                   int* r_count,
                                                    int num_bins,
                                                    float min_snr,
                                                    float adc_threshold);
 
   /**
    * Initailize labels for finding peak candidates.
+   *
+   * @note label_sum_i, label_sum_fs, label_sum_ss, label_max_i, label_npix, and
+   *       peak_count are passed solely so they can be reset on each iteration.
    *
    * @param[in] data The image data.
    * @param[in] mask The validity mask for each pixel in the image.
@@ -185,6 +191,12 @@ namespace xalgospp::features::impl {
    * @param[out] labels The initial labels for peak candidates (non-zero is candidate)
    * @param[in] num_pixels The number of pixels in the image.
    * @param[in] num_bins The number of radial bins.
+   * @param[out] label_sum_i Accumulated (background subtracted) intensity per peak label
+   * @param[out] label_sum_fs Accumulated fast-scan weighted position per peak label
+   * @param[out] label_sum_ss Accumulated slow-scan weighted position per peak label
+   * @param[out] label_max_i Maximum pixel intensity within a peak label
+   * @param[out] label_npix Number of pixels within a peak
+   * @param[out] peak_count Number of found peaks.
    */
   __global__ XALG_API void k_init_labels(const float* __restrict__ data,
                                          const bool* __restrict__ mask,
@@ -192,7 +204,13 @@ namespace xalgospp::features::impl {
                                          const float* __restrict__ r_map,
                                          int* labels,
                                          int num_pixels,
-                                         int num_bins);
+                                         int num_bins,
+                                         float* label_sum_i,
+                                         float* label_sum_fs,
+                                         float* label_sum_ss,
+                                         float* label_max_i,
+                                         int* label_npix,
+                                         int* peak_count);
 
   /**
    * Run label propagation (connected-components search) from an initial set.
@@ -239,7 +257,7 @@ namespace xalgospp::features::impl {
    *
    * @param[in] data The image data.
    * @param[in] labels The finalized peak candidate labels.
-   * @param[out] labels_sum_i Accumulated (background subtracted) intensity per peak label
+   * @param[out] label_sum_i Accumulated (background subtracted) intensity per peak label
    * @param[out] label_sum_fs Accumulated fast-scan weighted position per peak label
    * @param[out] label_sum_ss Accumulated slow-scan weighted position per peak label
    * @param[out] label_max_i Maximum pixel intensity within a peak label

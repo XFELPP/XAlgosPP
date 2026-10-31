@@ -363,7 +363,13 @@ namespace xalgospp::features {
                                                m_d_mask_r_map.r_map,
                                                m_d_peak_data.labels_v1,
                                                m_num_pixels,
-                                               m_params.num_radial_bins);
+                                               m_params.num_radial_bins,
+                                               m_d_peak_data.label_sum_i,
+                                               m_d_peak_data.label_sum_fs,
+                                               m_d_peak_data.label_sum_ss,
+                                               m_d_peak_data.label_max_i,
+                                               m_d_peak_data.label_npix,
+                                               m_d_peak_data.peak_count);
 
       // 6 ping-pong iterations --- should capture up to ~50 pixel blobs
       for (int i = 0; i < 3; ++i) {

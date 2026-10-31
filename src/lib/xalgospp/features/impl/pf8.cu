@@ -22,6 +22,7 @@
 #include "xalgospp/features/impl/pf8.hh" // Has Peak struct
 
 #include <utility>
+#include <vector>
 
 namespace xalgospp::features::impl {
   DevImageData::DevImageData(int npixels)
@@ -73,6 +74,16 @@ namespace xalgospp::features::impl {
 
     cudaMalloc(reinterpret_cast<void**>(&sum), bins_bytes);
     cudaMalloc(reinterpret_cast<void**>(&sum_sq), bins_bytes);
+
+    cudaMemset(sum, 0, bins_bytes);
+    cudaMemset(sum_sq, 0, bins_bytes);
+    cudaMemset(count, 0, count_bytes);
+
+    std::vector<float> init_r(nbins, 1e9f);
+    std::vector<float> init_l(nbins, -1e9f);
+
+    cudaMemcpy(r_threshold, init_r.data(), bins_bytes, cudaMemcpyHostToDevice);
+    cudaMemcpy(l_threshold, init_l.data(), bins_bytes, cudaMemcpyHostToDevice);
   }
 
   DevRadialStatistics::~DevRadialStatistics() {
@@ -259,9 +270,9 @@ namespace xalgospp::features::impl {
                                           float* r_sigma,
                                           float* r_threshold,
                                           float* l_threshold,
-                                          const float* r_sum,
-                                          const float* r_sum_sq,
-                                          const int* r_count,
+                                          float* r_sum,
+                                          float* r_sum_sq,
+                                          int* r_count,
                                           int num_bins,
                                           float min_snr,
                                           float adc_threshold) {
@@ -271,9 +282,17 @@ namespace xalgospp::features::impl {
     }
 
     int count { r_count[bin] };
+    float sum { r_sum[bin] };
+    float sum_sq { r_sum_sq[bin] };
+
+    // Reset for next iteration
+    r_count[bin] = 0;
+    r_sum[bin] = 0.0f;
+    r_sum_sq[bin] = 0.0f;
+
     if (count > 0) {
-      float mean { r_sum[bin] / count };
-      float sigma2 { (r_sum_sq[bin] / count) - (mean * mean) };
+      float mean { sum / count };
+      float sigma2 { (sum_sq / count) - (mean * mean) };
       float sigma { (sigma2 > 0.0f) ? sqrtf(sigma2) : 0.01f };
 
       r_offset[bin] = mean;
@@ -294,10 +313,25 @@ namespace xalgospp::features::impl {
                                 const float* __restrict__ r_map,
                                 int* labels,
                                 int num_pixels,
-                                int num_bins) {
+                                int num_bins,
+                                float* label_sum_i,
+                                float* label_sum_fs,
+                                float* label_sum_ss,
+                                float* label_max_i,
+                                int* label_npix,
+                                int* peak_count) {
     unsigned idx { blockIdx.x * blockDim.x + threadIdx.x };
     if (idx >= num_pixels) {
       return;
+    }
+
+    label_sum_i[idx] = 0.0f;
+    label_sum_fs[idx] = 0.0f;
+    label_sum_ss[idx] = 0.0f;
+    label_max_i[idx] = 0.0f;
+    label_npix[idx] = 0;
+    if (idx == 0) {
+      *peak_count = 0;
     }
 
     int bin { static_cast<int>(roundf(r_map[idx])) };
