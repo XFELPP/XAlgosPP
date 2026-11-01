@@ -225,21 +225,24 @@ if xalg_has_cuda
     deps_for_xalgospp += dbghelp_dep
 endif
 
-cpp_httplib_dep = dependency('cpp-httplib', required: false)
-if not cpp_httplib_dep.found()
-    message('cpp-httplib not found - using subproject')
-    # cpp-httplib deps:
-    # Since we added C to support Windows MPI, strict C17 causes issues with brotli CLI
-    if host_machine.system() != 'windows'
-        add_global_arguments('-D_GNU_SOURCE', language: 'c')
-    endif
-    brotli_proj = subproject('google-brotli', default_options: ['default_library=static'])
-    zlib_proj = subproject('zlib', default_options: ['default_library=static'])
+message('Setting up cpp-httplib (with OpenSSL, zlib, and brotli) from subproject')
+# Setup OpenSSL first.
+openssl_proj = subproject('openssl', default_options: ['default_library=static'])
 
-    # Now build
-    cpp_httplib_proj = subproject('cpp-httplib')
-    cpp_httplib_dep = cpp_httplib_proj.get_variable('cpp_httplib_dep')
+# cpp-httplib deps:
+# Since we added C to support Windows MPI, strict C17 causes issues with brotli CLI
+if host_machine.system() != 'windows'
+    add_global_arguments('-D_GNU_SOURCE', language: 'c')
 endif
+brotli_proj = subproject('google-brotli', default_options: ['default_library=static'])
+zlib_proj = subproject('zlib', default_options: ['default_library=static'])
+
+# Now build
+cpp_httplib_proj = subproject(
+    'cpp-httplib',
+    default_options: ['openssl=enabled', 'zlib=enabled', 'brotli=enabled'],
+)
+cpp_httplib_dep = cpp_httplib_proj.get_variable('cpp_httplib_dep')
 deps_for_xalgospp += cpp_httplib_dep
 
 # Add libdl as needed for JIT if not merged directly into the cstdlib
