@@ -16,7 +16,17 @@ Nonetheless, like all XFELPP projects, `XAlgosPP` also provides pre-built wheels
 <Tabs>
   <TabItem label="CPU Only" icon="seti:cpp">
     ```bash
-    pip install xalgospp --extra-index-url https://pypi.xfelpp.org/host
+    pip install "xalgospp+host" --extra-index-url https://pypi.xfelpp.org/host
+    ```
+  </TabItem>
+  <TabItem label="CUDA 12.8" icon="seti:cu">
+    ```bash
+    pip install "xalgospp+cuda128" --extra-index-url https://pypi.xfelpp.org/cuda128
+    ```
+  </TabItem>
+  <TabItem label="CUDA 13.2" icon="seti:cu">
+    ```bash
+    pip install "xalgospp+cuda132" --extra-index-url https://pypi.xfelpp.org/cuda132
     ```
   </TabItem>
 </Tabs>
@@ -27,8 +37,8 @@ The host-builds are currently configured as follows:
   <TabItem label="Linux" icon="linux">
     <Steps>
       1. glibc 2.28 (With GCC 14.2.1) and/or musl 1.2 (With GCC 14.2.0) for x86 only
-      2. Built against `ncarray == 0.7.6`
-      3. Built against `sbio == 0.1.4`
+      2. Built against `ncarray == 0.7.8`
+      3. Built against `sbio == 0.3.1`
       4. MPI support with `MPICH 5.0.1`
       5. Python Wheels for Python 3.8-3.15t
     </Steps>
@@ -36,8 +46,8 @@ The host-builds are currently configured as follows:
   <TabItem label="Windows" icon="seti:windows">
     <Steps>
       1. msvc 19.44.35228 for x86 only
-      2. Built against `ncarray == 0.7.6`
-      3. Built against `sbio == 0.1.4`
+      2. Built against `ncarray == 0.7.8`
+      3. Built against `sbio == 0.3.1`
       4. MPI support with `MS-MPI 10.1.3`
       5. Python Wheels for Python 3.8-3.15t
     </Steps>
@@ -45,15 +55,30 @@ The host-builds are currently configured as follows:
   <TabItem label="macOS" icon="apple">
     <Steps>
       1. clang 21.0.0 with `MACOSX_DEPLOYMENT_TARGET=11.0` for Apple Silicon (AArch64) only
-      2. Built against `ncarray == 0.7.6`
-      3. Built against `sbio == 0.1.4`
+      2. Built against `ncarray == 0.7.8`
+      3. Built against `sbio == 0.3.1`
       4. MPI support with `MPICH 5.0.1`
       5. Python Wheels for Python 3.8-3.15t
     </Steps>
   </TabItem>
 </Tabs>
 
+As a reminder, the `sbio` releases are built with support for the following data formats:
+- HDF5 - currently supporting the CXI specification
+- XTC1 (Internal implementation)
+- XTC2 (Internal implementation)
+
+Releases with GPU support are configured as above, with either CUDA 12.8, or CUDA 13.2. These are only built for x86/glibc Linux, and x86 Windows.
+
 Releases for the four core library builds (glibc and musl Linux, macOS, Windows) are also uploaded to the GitHub release independently of the Python wheel if that is preferred.
+
+<Aside type="caution" title="Using CUDA-Enabled Builds without a GPU">
+In general it is possible to use the CUDA-supported builds on a system without a GPU (or driver, more specifically). All XFELPP libraries provide stubs as needed (Windows uses `DELAYLOAD` directives instead). There is, however, one additional "gotcha" to look out for if using the pre-built wheels: `mpich` has its own requirements when configured and built with GPU support. In particular, you may get a CUDA error (and likely a segfault) arising from `mpich` if using the CUDA builds on a machine without a driver. Thankfully, the issue is simple to address. Setting the following environment variable will allow the libraries to be used without issue:
+
+```bash
+export MPIR_CVAR_ENABLE_GPU=0
+```
+</Aside>
 
 ## General Information
 
