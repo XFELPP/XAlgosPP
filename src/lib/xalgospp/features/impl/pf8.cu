@@ -25,6 +25,7 @@
 #include <vector>
 
 namespace xalgospp::features::impl {
+  DevImageData::DevImageData() = default;
   DevImageData::DevImageData(int npixels)
     : num_pixels(npixels)
   {
@@ -59,6 +60,7 @@ namespace xalgospp::features::impl {
     return *this;
   }
 
+  DevRadialStatistics::DevRadialStatistics() = default;
   DevRadialStatistics::DevRadialStatistics(int nbins)
     : num_bins(nbins)
   {
@@ -145,6 +147,7 @@ namespace xalgospp::features::impl {
     return *this;
   }
 
+  DevPeakLabelData::DevPeakLabelData() = default;
   DevPeakLabelData::DevPeakLabelData(int npixels)
     : num_pixels(npixels)
   {

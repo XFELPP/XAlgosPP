@@ -32,7 +32,7 @@ namespace xalgospp::features::impl {
    * and radius map information during peak finding algorithms.
    */
   struct XALG_API DevImageData {
-    DevImageData() = default;
+    DevImageData();
 
     // No copy
     DevImageData(const DevImageData& other) = delete;
@@ -60,7 +60,7 @@ namespace xalgospp::features::impl {
    * background signal (done in radial segments) during peak finding algorithms.
    */
   struct XALG_API DevRadialStatistics {
-    DevRadialStatistics() = default;
+    DevRadialStatistics();
 
     // No copy
     DevRadialStatistics(const DevRadialStatistics& other) = delete;
@@ -96,7 +96,7 @@ namespace xalgospp::features::impl {
    * the end user, and so are separated out from the final peak data.
    */
   struct XALG_API DevPeakLabelData {
-    DevPeakLabelData() = default;
+    DevPeakLabelData();
 
     // No copy
     DevPeakLabelData(const DevPeakLabelData& other) = delete;
