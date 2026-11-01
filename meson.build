@@ -226,15 +226,22 @@ if xalg_has_cuda
 endif
 
 message('Setting up cpp-httplib (with OpenSSL, zlib, and brotli) from subproject')
-# Setup OpenSSL first.
-openssl_proj = subproject('openssl', default_options: ['default_library=static'])
-
 # cpp-httplib deps:
 # Since we added C to support Windows MPI, strict C17 causes issues with brotli CLI
-if host_machine.system() != 'windows'
-    add_global_arguments('-D_GNU_SOURCE', language: 'c')
-endif
-brotli_proj = subproject('google-brotli', default_options: ['default_library=static'])
+# so the gnu17 standard is used below for brotli and OpenSSL.
+# Cannot set the global -D_GNU_SOURCE due to build issues with macOS and musl in
+# OpenSSL - they only have the POSIX strerror_r.
+
+# Setup OpenSSL first.
+openssl_proj = subproject(
+    'openssl',
+    default_options: ['default_library=static', 'c_std=gnu17,c17'],
+)
+
+brotli_proj = subproject(
+    'google-brotli',
+    default_options: ['default_library=static', 'c_std=gnu17,c17'],
+)
 zlib_proj = subproject('zlib', default_options: ['default_library=static'])
 
 # Now build
