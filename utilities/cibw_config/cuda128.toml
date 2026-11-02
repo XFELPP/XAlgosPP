@@ -59,7 +59,7 @@ before-build = [
     "python -m pip install -U pip",
     "python -m pip install \"meson>=1.10.1\" meson-python ninja \"pybind11[global]\" setuptools cmake delvewheel",
     "python -m pip install --break-system-packages \"ncarray==0.7.8+cuda128\" --extra-index-url https://pypi.xfelpp.org/cuda128/",
-    "python -m pip install --break-system-packages \"sbio==0.4.0+cuda128\" --extra-index-url https://pypi.xfelpp.org/cuda128/",
+    "python -m pip install --break-system-packages \"sbio==0.4.1+cuda128\" --extra-index-url https://pypi.xfelpp.org/cuda128/",
 ]
 
 repair-wheel-command = "python utilities/repair_wheel.py {wheel} {dest_dir} --no-exclude-core"
@@ -75,7 +75,8 @@ CUDA_HOME = "/usr/local/cuda-12.8"
 NVCC = "/usr/local/cuda-12.8/bin/nvcc"
 PATH = "/__w/_temp/mpi-abi-stubs/bin:/usr/local/cuda-12.8/bin:/usr/local/cuda/bin:$PATH"
 LIBRARY_PATH = "/project/install/lib:/project/install/lib64:$LIBRARY_PATH"
-LD_LIBRARY_PATH = "/project/install/lib:/project/install/lib64:/usr/local/cuda-12.8/lib64:/usr/local/cuda/lib64:$LD_LIBRARY_PATH"
+# Include stub lib for sbio MPI ABI
+LD_LIBRARY_PATH = "/__w/_temp/mpi-abi-stubs/lib:/project/install/lib:/project/install/lib64:/usr/local/cuda-12.8/lib64:/usr/local/cuda/lib64:$LD_LIBRARY_PATH"
 LDFLAGS = "-Wl,--allow-shlib-undefined -L/project/install/lib -L/project/install/lib64"
 MPI_HOME = "/__w/_temp/mpi-abi-stubs"
 PKG_CONFIG_PATH = "/project/install/lib/pkgconfig:/project/install/lib64/pkgconfig:$PKG_CONFIG_PATH"
@@ -86,7 +87,7 @@ before-build = [
     "python -m pip install -U pip",
     "python -m pip install \"meson>=1.10.1\" meson-python ninja \"pybind11[global]\" setuptools cmake delvewheel",
     "python -m pip install --break-system-packages \"ncarray==0.7.8+cuda128\" --extra-index-url https://pypi.xfelpp.org/cuda128/",
-    "python -m pip install --break-system-packages \"sbio==0.4.0+cuda128\" --extra-index-url https://pypi.xfelpp.org/cuda128/",
+    "python -m pip install --break-system-packages \"sbio[mpi]==0.4.1+cuda128\" --extra-index-url https://pypi.xfelpp.org/cuda128/",
 ]
 repair-wheel-command = "python utilities/repair_wheel_win.py {dest_dir} {wheel} --no-exclude-core"
 

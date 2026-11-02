@@ -90,7 +90,7 @@ jobs:
           python -m pip install "ncarray==0.7.8+cuda128" --extra-index-url https://pypi.xfelpp.org/cuda128/
           $env:PKG_CONFIG_PATH = "$(nca-pkg-config --pkg-config-path):$env:PKG_CONFIG_PATH"
 
-          python -m pip install "sbio==0.4.0+cuda128" --extra-index-url https://pypi.xfelpp.org/cuda128/
+          python -m pip install "sbio[mpi]==0.4.1+cuda128" --extra-index-url https://pypi.xfelpp.org/cuda128/
           $env:PKG_CONFIG_PATH = "$(sbio-pkg-config --pkg-config-path):$env:PKG_CONFIG_PATH"
 
           $env:PATH += ";$env:GITHUB_WORKSPACE/install/bin;C:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.8/bin"
@@ -136,11 +136,24 @@ jobs:
           fi
           ccache -z
           /opt/python/cp310-cp310/bin/pip install meson ninja
+          export PATH="/opt/python/cp310-cp310/bin:$PATH"
+
+          # Run before sbio download - cannot just use the sbio[mpi] optional deps
+          # As there are no wheels for musl builds - set LD_LIBRARY_PATH instead.
+          # Build MPI-abi-stubs first - make sure to set libdir.
+          # Cannot build into the sbio project... or it will ignore it.
+          export XALG_MPI_PREFIX="${RUNNER_TEMP}/mpi-abi-stubs"
+          meson subprojects download mpi-abi-stubs
+          meson setup mpiabibuild subprojects/mpi-abi-stubs --prefix="${XALG_MPI_PREFIX}" --libdir=lib -Dbuildtype=release
+          meson compile -C mpiabibuild
+          meson install -C mpiabibuild
+          export PATH="${XALG_MPI_PREFIX}/bin:${PATH}"
+          export LD_LIBRARY_PATH="${XALG_MPI_PREFIX}/lib:${LD_LIBRARY_PATH}"
+
           /opt/python/cp310-cp310/bin/python -m pip install "ncarray==0.7.8+cuda128" --extra-index-url https://pypi.xfelpp.org/cuda128/
-          /opt/python/cp310-cp310/bin/python -m pip install "sbio==0.4.0+cuda128" --extra-index-url https://pypi.xfelpp.org/cuda128/
+          /opt/python/cp310-cp310/bin/python -m pip install "sbio==0.4.1+cuda128" --extra-index-url https://pypi.xfelpp.org/cuda128/
 
           mkdir install
-          /opt/python/cp310-cp310/bin/pip install meson ninja
           export PATH="/opt/python/cp310-cp310/bin:$PATH"
           export LD_LIBRARY_PATH="/project/install/lib:/project/install/lib64:/usr/local/cuda-12.8/lib64:/usr/local/cuda/lib64:$LD_LIBRARY_PATH"
           export LIBRARY_PATH="/project/install/lib:/project/install/lib64:$LIBRARY_PATH"
@@ -152,16 +165,6 @@ jobs:
 
           export PKG_CONFIG_PATH="$(nca-pkg-config --pkg-config-path):${PKG_CONFIG_PATH}"
           export PKG_CONFIG_PATH="$(sbio-pkg-config --pkg-config-path):${PKG_CONFIG_PATH}"
-          export PATH="/opt/python/cp310-cp310/bin:$PATH"
-
-          # Build MPI-abi-stubs first - make sure to set libdir.
-          # Cannot build into the sbio project... or it will ignore it.
-          export XALG_MPI_PREFIX="${RUNNER_TEMP}/mpi-abi-stubs"
-          meson subprojects download mpi-abi-stubs
-          meson setup mpiabibuild subprojects/mpi-abi-stubs --prefix="${XALG_MPI_PREFIX}" --libdir=lib -Dbuildtype=release
-          meson compile -C mpiabibuild
-          meson install -C mpiabibuild
-          export PATH="${XALG_MPI_PREFIX}/bin:${PATH}"
 
           export LDFLAGS="-Wl,--allow-shlib-undefined ${LDFLAGS}"
 

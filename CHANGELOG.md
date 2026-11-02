@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.1] - 2026-11-01
+
+### Changed
+- Move to `sbio` version `v0.4.1`
+
+### Fixed
+- Setup optional dependency on `mpich==5.0.2` for correct so version.
+- Setup imports in `xalgospp/__init__.py` to avoid manual library path requirements at runtime.
+
 ## [0.3.0] - 2026-11-01
 
 ### Changed

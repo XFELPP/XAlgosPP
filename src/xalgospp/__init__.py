@@ -197,6 +197,27 @@ elif platform.system() == "Linux":
             except Exception:
                 pass
 
+
+# Setup for MPI ABI install - no harm, no foul, if built with a full implementation
+if platform.system() == "Windows":
+    prefix_dll_dir: str = os.path.join(sys.prefix, "Library", "bin")
+    if os.path.exists(prefix_dll_dir):
+        os.add_dll_directory(prefix_dll_dir)
+else:
+    prefix_lib_dir: str = os.path.join(sys.prefix, "lib")
+
+    mpi_abi_path: str
+    if platform.system() == "Linux":
+        mpi_abi_path = os.path.join(prefix_lib_dir, "libmpi_abi.so.1")
+    else:
+        mpi_abi_path = os.path.join(prefix_lib_dir, "libmpi_abi.1.dylib")
+    if os.path.exists(mpi_abi_path):
+        try:
+            ctypes.CDLL(mpi_abi_path, mode=ctypes.RTLD_GLOBAL)
+        except Exception:
+            pass
+
+
 # While the XAlgosPP modules import ncarray, and sbio -- it's too late to avoid link
 # issues The loader will search for the ncarray libs before. So must import ncarray
 # and sbio here, before import of the XAlgosPP modules

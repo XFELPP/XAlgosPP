@@ -38,7 +38,7 @@ The host-builds are currently configured as follows:
     <Steps>
       1. glibc 2.28 (With GCC 14.2.1) and/or musl 1.2 (With GCC 14.2.0) for x86 only
       2. Built against `ncarray == 0.7.8`
-      3. Built against `sbio == 0.4.0`
+      3. Built against `sbio == 0.4.1`
       4. MPI ABI 5
       5. Python Wheels for Python 3.8-3.15t
     </Steps>
@@ -47,7 +47,7 @@ The host-builds are currently configured as follows:
     <Steps>
       1. msvc 19.44.35228 for x86 only
       2. Built against `ncarray == 0.7.8`
-      3. Built against `sbio == 0.4.0`
+      3. Built against `sbio == 0.4.1`
       4. MPI ABI 5
       5. Python Wheels for Python 3.8-3.15t
     </Steps>
@@ -56,7 +56,7 @@ The host-builds are currently configured as follows:
     <Steps>
       1. clang 21.0.0 with `MACOSX_DEPLOYMENT_TARGET=11.0` for Apple Silicon (AArch64) only
       2. Built against `ncarray == 0.7.8`
-      3. Built against `sbio == 0.4.0`
+      3. Built against `sbio == 0.4.1`
       4. MPI ABI 5
       5. Python Wheels for Python 3.8-3.15t
     </Steps>
@@ -70,7 +70,7 @@ As a reminder, the `sbio` releases are built with support for the following data
 
 Releases with GPU support are configured as above, with either CUDA 12.8, or CUDA 13.2. These are only built for x86/glibc Linux, and x86 Windows.
 
-For the runtime MPI support, the optional dependency provides a conforming MPI implementation: `sbio[mpi]`. On Linux(glibc)/macOS this is `mpich == 5.0.1`. For Windows it is the Intel MPI runtime. Any implementation providing the ABI should work as well.
+For the runtime MPI support, the optional dependency provides a conforming MPI implementation: `sbio[mpi]`. On Linux(glibc)/macOS this is `mpich == 5.0.2`. For Windows it is the Intel MPI runtime. Any implementation providing the ABI should work as well.
 
 Releases for the four core library builds (glibc and musl Linux, macOS, Windows) are also uploaded to the GitHub release independently of the Python wheel if that is preferred.
 
