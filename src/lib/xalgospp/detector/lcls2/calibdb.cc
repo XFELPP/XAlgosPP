@@ -37,6 +37,8 @@ typedef SSIZE_T ssize_t;
 #include <charconv>
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
+#include <filesystem>
 #include <map>
 #include <optional>
 #include <set>
@@ -49,6 +51,29 @@ typedef SSIZE_T ssize_t;
 #include <string>
 #include <utility>
 #include <vector>
+
+namespace {
+  // In the builds with bundled OpenSSL not finding hte certificates...
+  void set_system_certificates(httplib::Client& cli) {
+#ifdef CPPHTTPLIB_OPENSSL_SUPPORT
+    if (std::getenv("SSL_CERT_FILE") || std::getenv("SSL_CERT_DIR")) {
+      return;
+    }
+    for (const char* path : {
+        "/etc/pki/tls/certs/ca-bundle.crt",   // RHEL, Rocky, manylinux
+        "/etc/ssl/certs/ca-certificates.crt", // Debian, Ubuntu, Alpine
+        "/etc/ssl/cert.pem",                  // macOS
+        "/etc/ssl/ca-bundle.pem"              // suse
+      }) {
+
+      if (std::filesystem::exists(path)) {
+        cli.set_ca_cert_path(path);
+        return;
+      }
+    }
+#endif // CPPHTTPLIB_OPENSSL_SUPPORT
+  }
+} // anonymous namespace
 
 namespace xalgospp::lcls2 {
 
@@ -75,6 +100,8 @@ namespace xalgospp::lcls2 {
 
     // May want to use psdmint or others instead
     httplib::Client cli(base_url); // "https://pswww.slac.stanford.edu"
+    // With bundled OpenSSL not finding certificates....
+    set_system_certificates(cli);
 
     // The detnames endpoint for looking up detectors by type and serial number
     std::string endpoint { std::string("/calib_ws/cdb_detnames/") + det_type };
@@ -104,9 +131,10 @@ namespace xalgospp::lcls2 {
         }
       }
     } else {
-      logger->error("Could not find shortname for detector type: {} (Serial No: {})",
+      logger->error("Could not find shortname for detector type: {} (Serial No: {}) Err: {}",
                     det_type,
-                    det_serial_no);
+                    det_serial_no,
+                    httplib::to_string(res.error()));
       return short_name;
     }
     return short_name;
@@ -423,6 +451,8 @@ namespace xalgospp::lcls2 {
     logger->debug("[LCLS2][load_constants] Trying URL: {}", base_url);
 
     httplib::Client cli(base_url); // "https://pswww.slac.stanford.edu"
+    // With bundled OpenSSL not finding certificates....
+    set_system_certificates(cli);
 
     // Try to use the "experiment" DB first. If nothing found, fallback on "detector" DB
     std::string db_in_use { "cdb_" + experiment };
@@ -485,9 +515,15 @@ namespace xalgospp::lcls2 {
             }
           }
         } else {
-          logger->error("[LCLS2][{}] Call to endpoint returned non-200 status {} - skipping!",
-                        endpoint,
-                        res->status);
+          if (res) {
+            logger->error("[LCLS2][{}] Call to endpoint returned non-200 status {} - skipping!",
+                          endpoint,
+                          res->status);
+          } else {
+            logger->error("[LCLS2][{}] Call to endpoint failed: {}",
+                          endpoint,
+                          httplib::to_string(res.error()));
+          }
         }
       }
 
