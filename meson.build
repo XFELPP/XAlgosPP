@@ -2,7 +2,7 @@ project(
     'xalgospp',
     'c',
     'cpp',
-    version: '0.2.1',
+    version: '0.3.0',
     meson_version: '>=1.10.0',
     default_options: [
         'c_std=c17',
@@ -270,6 +270,38 @@ deps_for_xalgospp += eigen_dep
 ## MPI
 if build_mpi_opt == 'none'
     message('Skipping MPI support.')
+elif build_mpi_opt == 'abi'
+    mpi_abi_proj = subproject('mpi-abi-stubs')
+    mpi_dep = mpi_abi_proj.get_variable('mpi_abi_dep')
+    sbio_has_mpi = true
+    sbio_has_mpi_abi = true
+    bundle_mpi = false
+    found_mpi = true
+
+    add_project_arguments('-DSBIO_HAS_MPI', language: using_langs)
+    add_project_arguments('-DXALG_HAS_MPI', language: using_langs)
+    add_project_arguments('-DSBIO_HAS_MPI_ABI', language: using_langs)
+    add_project_arguments('-DXALG_HAS_MPI_ABI', language: using_langs)
+    deps_for_xalgospp += mpi_dep
+
+    # ---------------------- Also will use `hwloc` ---------------------- #
+    # Not understanding where hwloc appears in all cases in CI - and its usually wrong
+    # Just ALWAYS use the subproject.
+    message('Building hwloc by subproject.')
+    hwloc_proj = subproject('hwloc')
+    hwloc_dep = hwloc_proj.get_variable('hwloc_dep')
+    message('Adding the `hwloc` dependency.')
+    deps_for_xalgospp += hwloc_dep
+
+    # hwloc_dep = dependency('hwloc', required: false)
+    # if not hwloc_dep.found()
+    #    message('Falling back to building hwloc by subproject.')
+    #
+    #    hwloc_proj = subproject('hwloc')
+    #    hwloc_dep = hwloc_proj.get_variable('hwloc_dep')
+    # endif
+    # message('Adding the `hwloc` dependency.')
+    # deps_for_xalgospp += hwloc_dep
 else
     try_sys = false
     try_mpich = false

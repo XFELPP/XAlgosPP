@@ -34,7 +34,7 @@ config-settings = { "setup-args" = ["-Dbuild_core=false", "-Dbuildtype=release"]
 before-all = [
     # Because MPI....
     "mkdir -p /__w/_temp",
-    "cp -a /project/install /__w/_temp/mpich-install",
+    "cp -a /project/install /__w/_temp/mpi-abi-stubs",
     """
     if command -v apt-get >/dev/null; then
         apt-get update && apt-get install -y ccache
@@ -59,7 +59,7 @@ before-build = [
     "python -m pip install -U pip",
     "python -m pip install \"meson>=1.10.1\" meson-python ninja \"pybind11[global]\" setuptools cmake delvewheel",
     "python -m pip install --break-system-packages \"ncarray==0.7.8+cuda132\" --extra-index-url https://pypi.xfelpp.org/cuda132/",
-    "python -m pip install --break-system-packages \"sbio==0.3.1+cuda128\" --extra-index-url https://pypi.xfelpp.org/cuda128/",
+    "python -m pip install --break-system-packages \"sbio==0.4.0+cuda128\" --extra-index-url https://pypi.xfelpp.org/cuda128/",
 ]
 
 repair-wheel-command = "python utilities/repair_wheel.py {wheel} {dest_dir} --no-exclude-core"
@@ -73,11 +73,11 @@ CUDA_PATH = "/usr/local/cuda-13.2"
 CUDA_HOME = "/usr/local/cuda-13.2"
 # MPICH build requires this NVCC variable
 NVCC = "/usr/local/cuda-13.2/bin/nvcc"
-PATH = "/__w/_temp/mpich-install/bin:/usr/local/cuda-13.2/bin:/usr/local/cuda/bin:$PATH"
+PATH = "/__w/_temp/mpi-abi-stubs/bin:/usr/local/cuda-13.2/bin:/usr/local/cuda/bin:$PATH"
 LIBRARY_PATH = "/project/install/lib:/project/install/lib64:$LIBRARY_PATH"
 LD_LIBRARY_PATH = "/project/install/lib:/project/install/lib64:/usr/local/cuda-13.2/lib64:/usr/local/cuda/lib64:$LD_LIBRARY_PATH"
 LDFLAGS = "-Wl,--allow-shlib-undefined -L/project/install/lib -L/project/install/lib64"
-MPI_HOME = "/__w/_temp/mpich-install"
+MPI_HOME = "/__w/_temp/mpi-abi-stubs"
 PKG_CONFIG_PATH = "/project/install/lib/pkgconfig:/project/install/lib64/pkgconfig:$PKG_CONFIG_PATH"
 
 [tool.cibuildwheel.windows]
@@ -86,12 +86,13 @@ before-build = [
     "python -m pip install -U pip",
     "python -m pip install \"meson>=1.10.1\" meson-python ninja \"pybind11[global]\" setuptools cmake delvewheel",
     "python -m pip install --break-system-packages \"ncarray==0.7.8+cuda132\" --extra-index-url https://pypi.xfelpp.org/cuda132/",
-    "python -m pip install --break-system-packages \"sbio==0.3.1+cuda132\" --extra-index-url https://pypi.xfelpp.org/cuda132/",
+    "python -m pip install --break-system-packages \"sbio==0.4.0+cuda132\" --extra-index-url https://pypi.xfelpp.org/cuda132/",
 ]
 repair-wheel-command = "python utilities/repair_wheel_win.py {dest_dir} {wheel} --no-exclude-core"
 
 [tool.cibuildwheel.windows.environment]
 PIP_RETRIES = "20"
+XALG_MPI_PREFIX = "$GITHUB_WORKSPACE/install"
 CUDA_PATH = "C:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v13.2"
 CUDA_HOME = "C:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v13.2"
 LIB = "$GITHUB_WORKSPACE/install/lib;$LIB"

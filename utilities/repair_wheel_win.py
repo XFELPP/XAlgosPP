@@ -95,6 +95,8 @@ def main():
             "xtc1slim.dll",
             "--no-dll",
             "xtc2slim.dll",
+            "--no-dll",
+            "mpi_abi.dll",
         ]
     )
     if not no_exclude_core:

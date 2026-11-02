@@ -9,7 +9,7 @@ requires-python = ">=3.8"
 dynamic = ["version"]
 dependencies = [
     "ncarray==0.7.8",
-    "sbio==0.3.1",
+    "sbio==0.4.0",
 ]
 authors = [
     { name = "Gabriel Dorlhiac", email = "gabriel@dorlhiac.com" },
@@ -21,6 +21,7 @@ classifiers = [
     "Environment :: GPU",
     "Environment :: GPU :: NVIDIA CUDA",
     "Environment :: GPU :: NVIDIA CUDA :: 12",
+    "Environment :: GPU :: NVIDIA CUDA :: 13",
     "Intended Audience :: Developers",
     "Intended Audience :: Science/Research",
     "License :: OSI Approved :: GNU Affero General Public License v3",
@@ -36,10 +37,18 @@ classifiers = [
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
     "Programming Language :: Python :: 3.14",
+    "Programming Language :: Python :: 3.15",
+    "Programming Language :: Python :: Free Threading",
     "Programming Language :: C++",
     "Topic :: Scientific/Engineering",
     "Topic :: Software Development :: Libraries",
     "Topic :: Software Development :: Libraries :: Python Modules",
+]
+
+[project.optional-dependencies]
+mpi = [
+    "mpich==5.0.1; sys_platform != 'win32'",
+    "impi-rt; sys_platform == 'win32'",
 ]
 
 [project.scripts]
