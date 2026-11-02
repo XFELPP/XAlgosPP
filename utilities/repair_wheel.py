@@ -103,7 +103,7 @@ def update_pc_in_repaired_wheel(whl_path: str):
             f
             for f in z.namelist()
             if re.search(
-                r"^(lib)?(hdf5|mpi|xalgospp|devxalgospp)[a-zA-Z0-9_.\-]*\.(so|dylib|dll)",
+                r"^(lib)?(hdf5|xalgospp|devxalgospp)[a-zA-Z0-9_.\-]*\.(so|dylib|dll)",
                 os.path.basename(f),
             )
         ]
@@ -231,6 +231,7 @@ def main():
             b"gomp",
             b"crypto",
             b"ssl",
+            b"mpi_abi",
             b"mpi",
         ]
         if not no_exclude_core:
@@ -276,7 +277,8 @@ def main():
             "libgomp*",
             "libcrypto*",
             "libssl*",
-            "libmpi-*",
+            "libmpi_abi*",
+            "libmpi*",
             *CUDA_DRIVER_LIB_EXCLUDES,
         ]
         if not no_exclude_core:

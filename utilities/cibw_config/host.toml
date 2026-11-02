@@ -26,7 +26,7 @@ config-settings = { "setup-args" = ["-Dbuild_core=false", "-Dbuildtype=release"]
 # Because MPI....
 before-all = [
     "mkdir -p /__w/_temp",
-    "cp -a /project/install /__w/_temp/mpich-install",
+    "cp -a /project/install /__w/_temp/mpi-abi-stubs",
 ]
 before-build = [
     "python -m pip install -U pip",
@@ -45,8 +45,8 @@ PIP_RETRIES = "20"
 LIBRARY_PATH = "/project/install/lib:/project/install/lib64:$LIBRARY_PATH"
 LD_LIBRARY_PATH = "/project/install/lib:/project/install/lib64:$LD_LIBRARY_PATH"
 LDFLAGS = "-L/project/install/lib -L/project/install/lib64"
-PATH = "/__w/_temp/mpich-install/bin:$PATH"
-MPI_HOME = "/__w/_temp/mpich-install"
+PATH = "/__w/_temp/mpi-abi-stubs/bin:$PATH"
+MPI_HOME = "/__w/_temp/mpi-abi-stubs"
 PKG_CONFIG_PATH = "/project/install/lib/pkgconfig:/project/install/lib64/pkgconfig:$PKG_CONFIG_PATH"
 
 [tool.cibuildwheel.macos]
@@ -81,7 +81,7 @@ MACOSX_DEPLOYMENT_TARGET = "11.0"
 SYSTEM_VERSION_COMPAT = "0"
 # Not able to find cmake in wheel step otherwise?
 # Sigh... MPICH hacks.... see the horror in the CI
-PATH = "${RUNNER_TEMP}/mpich-install/bin:$PATH:/Applications/CMake.app/Contents/bin:$(pwd)/install/bin:$GITHUB_WORKSPACE/install/bin:/opt/homebrew/bin:/usr/local/bin"
+PATH = "${RUNNER_TEMP}/mpi-abi-stubs/bin:$PATH:/Applications/CMake.app/Contents/bin:$(pwd)/install/bin:$GITHUB_WORKSPACE/install/bin:/opt/homebrew/bin:/usr/local/bin"
 LIBRARY_PATH = "$(pwd)/install/lib:$GITHUB_WORKSPACE/install/lib:$LIBRARY_PATH"
 DYLD_LIBRARY_PATH = "$(pwd)/install/lib:$GITHUB_WORKSPACE/install/lib:$DYLD_LIBRARY_PATH"
 LDFLAGS = "-L$GITHUB_WORKSPACE/install/lib -L$(pwd)/install/lib"
@@ -99,6 +99,7 @@ repair-wheel-command = "python utilities/repair_wheel_win.py {dest_dir} {wheel} 
 
 [tool.cibuildwheel.windows.environment]
 PIP_RETRIES = "20"
+XALG_MPI_PREFIX = "$GITHUB_WORKSPACE/install"
 LIB = "$GITHUB_WORKSPACE/install/lib;$LIB"
 PATH = "$GITHUB_WORKSPACE/install/bin;$PATH"
 PreferredToolArchitecture = "x64"

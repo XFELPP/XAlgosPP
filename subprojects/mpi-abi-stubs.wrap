@@ -1,0 +1,8 @@
+[wrap-git]
+url = https://github.com/mpi-forum/mpi-abi-stubs
+revision = 755bee9bc803f97db1f3b351553060b4f316ea91
+depth = 1
+patch_directory = mpi-abi-stubs
+
+[provide]
+mpi_abi = mpi_abi_dep
