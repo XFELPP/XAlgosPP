@@ -90,7 +90,7 @@ jobs:
           python -m pip install "ncarray==0.7.8+cuda128" --extra-index-url https://pypi.xfelpp.org/cuda128/
           $env:PKG_CONFIG_PATH = "$(nca-pkg-config --pkg-config-path):$env:PKG_CONFIG_PATH"
 
-          python -m pip install "sbio==0.3.1+cuda128" --extra-index-url https://pypi.xfelpp.org/cuda128/
+          python -m pip install "sbio==0.4.0+cuda128" --extra-index-url https://pypi.xfelpp.org/cuda128/
           $env:PKG_CONFIG_PATH = "$(sbio-pkg-config --pkg-config-path):$env:PKG_CONFIG_PATH"
 
           $env:PATH += ";$env:GITHUB_WORKSPACE/install/bin;C:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.8/bin"
@@ -137,7 +137,7 @@ jobs:
           ccache -z
           /opt/python/cp310-cp310/bin/pip install meson ninja
           /opt/python/cp310-cp310/bin/python -m pip install "ncarray==0.7.8+cuda128" --extra-index-url https://pypi.xfelpp.org/cuda128/
-          /opt/python/cp310-cp310/bin/python -m pip install "sbio==0.3.1+cuda128" --extra-index-url https://pypi.xfelpp.org/cuda128/
+          /opt/python/cp310-cp310/bin/python -m pip install "sbio==0.4.0+cuda128" --extra-index-url https://pypi.xfelpp.org/cuda128/
 
           mkdir install
           /opt/python/cp310-cp310/bin/pip install meson ninja

@@ -59,7 +59,7 @@ before-build = [
     "python -m pip install -U pip",
     "python -m pip install \"meson>=1.10.1\" meson-python ninja \"pybind11[global]\" setuptools cmake delvewheel",
     "python -m pip install --break-system-packages \"ncarray==0.7.8+cuda128\" --extra-index-url https://pypi.xfelpp.org/cuda128/",
-    "python -m pip install --break-system-packages \"sbio==0.3.1+cuda128\" --extra-index-url https://pypi.xfelpp.org/cuda128/",
+    "python -m pip install --break-system-packages \"sbio==0.4.0+cuda128\" --extra-index-url https://pypi.xfelpp.org/cuda128/",
 ]
 
 repair-wheel-command = "python utilities/repair_wheel.py {wheel} {dest_dir} --no-exclude-core"
@@ -86,7 +86,7 @@ before-build = [
     "python -m pip install -U pip",
     "python -m pip install \"meson>=1.10.1\" meson-python ninja \"pybind11[global]\" setuptools cmake delvewheel",
     "python -m pip install --break-system-packages \"ncarray==0.7.8+cuda128\" --extra-index-url https://pypi.xfelpp.org/cuda128/",
-    "python -m pip install --break-system-packages \"sbio==0.3.1+cuda128\" --extra-index-url https://pypi.xfelpp.org/cuda128/",
+    "python -m pip install --break-system-packages \"sbio==0.4.0+cuda128\" --extra-index-url https://pypi.xfelpp.org/cuda128/",
 ]
 repair-wheel-command = "python utilities/repair_wheel_win.py {dest_dir} {wheel} --no-exclude-core"
 
